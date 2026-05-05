@@ -1,0 +1,688 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Policy and Risk Engine API
+  version: 1.0.0
+  description: |
+    Runtime decision authority for every action and disclosure in the VocalIQ
+    pipeline. The Policy Engine evaluates requests against versioned policy
+    rules, considering authentication level, fraud risk score, action type,
+    and tenant configuration.
+
+    Target latency: <50ms at p99 for single evaluations.
+
+    Policy rules are versioned and auditable. Every evaluation is logged.
+    The engine supports simulation mode for testing policy changes before
+    they take effect.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. The /evaluate hot path is rate-limited
+    per-session (burst of 120/min per session) to match turn processing
+    throughput. Management endpoints follow standard tenant-level limits.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/policy/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Evaluation
+    description: Runtime policy evaluation (hot path)
+  - name: Rules
+    description: Policy rule management
+  - name: Versions
+    description: Policy versioning and publishing
+  - name: Matrix
+    description: Action permission matrix
+
+paths:
+  /evaluate:
+    post:
+      operationId: evaluatePolicy
+      summary: Evaluate a policy decision
+      description: |
+        The core hot-path endpoint. Called by the Conversation Runtime before
+        any tool call, sensitive disclosure, or state-changing action.
+
+        Returns allow/deny/step_up/human_approval with reason codes traceable
+        to specific policy rules and versions.
+      tags: [Evaluation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyEvaluationRequest'
+      responses:
+        '200':
+          description: Policy decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDecision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          description: Policy Engine unavailable. Caller must deny all actions (fail-closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /evaluate/batch:
+    post:
+      operationId: batchEvaluatePolicy
+      summary: Evaluate multiple policy decisions in one call
+      description: Used when a graph node requires multiple checks (e.g., disclosure + tool call). Each request is evaluated independently.
+      tags: [Evaluation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchEvaluationRequest'
+      responses:
+        '200':
+          description: Batch decisions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchEvaluationResponse'
+
+  /sets:
+    post:
+      operationId: createPolicySet
+      summary: Create a new policy set
+      tags: [Rules]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicySetRequest'
+      responses:
+        '201':
+          description: Policy set created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySet'
+    get:
+      operationId: listPolicySets
+      summary: List policy sets
+      tags: [Rules]
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Policy sets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySetList'
+
+  /sets/{policy_set_id}:
+    get:
+      operationId: getPolicySet
+      summary: Get policy set details
+      tags: [Rules]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+      responses:
+        '200':
+          description: Policy set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySet'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /sets/{policy_set_id}/rules:
+    get:
+      operationId: listPolicyRules
+      summary: List rules within a policy set
+      tags: [Rules]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+        - name: action_type
+          in: query
+          schema:
+            type: string
+        - name: autonomy_level
+          in: query
+          schema:
+            type: string
+            enum: [A0, A1, A2, A3, A4, A5, A6]
+      responses:
+        '200':
+          description: Policy rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRuleList'
+    post:
+      operationId: createPolicyRule
+      summary: Create a new policy rule
+      tags: [Rules]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyRuleRequest'
+      responses:
+        '201':
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyRule'
+
+  /sets/{policy_set_id}/versions:
+    post:
+      operationId: createPolicyVersion
+      summary: Create a new version of a policy set
+      tags: [Versions]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyVersionRequest'
+      responses:
+        '201':
+          description: Version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyVersion'
+
+  /sets/{policy_set_id}/versions/{version_id}/test:
+    post:
+      operationId: testPolicyVersion
+      summary: Simulate policy evaluation against a version
+      description: |
+        Runs a policy evaluation in simulation mode against a specific
+        policy version. The result is not enforced. Used for testing
+        policy changes before publishing.
+      tags: [Versions]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyEvaluationRequest'
+      responses:
+        '200':
+          description: Simulated decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDecision'
+
+  /sets/{policy_set_id}/versions/{version_id}/publish:
+    post:
+      operationId: publishPolicyVersion
+      summary: Publish a policy version
+      description: Makes the policy version active for runtime evaluation. Requires approval chain.
+      tags: [Versions]
+      parameters:
+        - $ref: '#/components/parameters/PolicySetId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishPolicyRequest'
+      responses:
+        '200':
+          description: Published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishPolicyResponse'
+
+  /matrix:
+    get:
+      operationId: getActionMatrix
+      summary: Get the action permission matrix
+      description: |
+        Returns the full matrix mapping action types to required authentication
+        levels, risk thresholds, and autonomy classifications. Used by the
+        Graph Compiler for cross-reference validation.
+      tags: [Matrix]
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Action matrix
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionMatrix'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PolicySetId:
+      name: policy_set_id
+      in: path
+      required: true
+      schema:
+        type: string
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    PolicyEvaluationRequest:
+      type: object
+      required: [tenant_id, session_id, requested_action, auth_level]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        requested_action:
+          type: string
+          description: "Action identifier, e.g., card.block, balance.read, transfer.initiate"
+        action_parameters:
+          type: object
+          description: Action-specific parameters for rule evaluation
+        auth_level:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        fraud_risk_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+        risk_level:
+          type: string
+          enum: [low, elevated, high, very_high, critical]
+        graph_node_id:
+          type: string
+        autonomy_level:
+          type: string
+          enum: [A0, A1, A2, A3, A4, A5]
+        caller_context:
+          $ref: '#/components/schemas/CallerContext'
+
+    CallerContext:
+      type: object
+      properties:
+        vulnerability_flags:
+          type: array
+          items:
+            type: string
+        complaint_active:
+          type: boolean
+        collections_jurisdiction:
+          type: string
+        call_duration_seconds:
+          type: integer
+        turn_count:
+          type: integer
+
+    PolicyDecision:
+      type: object
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [allow, deny, step_up, human_approval]
+        reason_codes:
+          type: array
+          items:
+            type: string
+          description: "Machine-readable reason codes, e.g., AUTH_INSUFFICIENT, RISK_TOO_HIGH"
+        reason_text:
+          type: string
+          description: Human-readable explanation
+        required_auth_level:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+          nullable: true
+          description: Required auth level if decision is step_up
+        policy_version:
+          type: string
+        rules_matched:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchedRule'
+        evaluated_at:
+          type: string
+          format: date-time
+        latency_ms:
+          type: integer
+
+    MatchedRule:
+      type: object
+      properties:
+        rule_id:
+          type: string
+        rule_name:
+          type: string
+        outcome:
+          type: string
+          enum: [allow, deny, step_up, human_approval]
+
+    BatchEvaluationRequest:
+      type: object
+      required: [evaluations]
+      properties:
+        evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyEvaluationRequest'
+          maxItems: 10
+
+    BatchEvaluationResponse:
+      type: object
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyDecision'
+        total_latency_ms:
+          type: integer
+
+    CreatePolicySetRequest:
+      type: object
+      required: [tenant_id, name]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        base_policy_set_id:
+          type: string
+          nullable: true
+          description: Inherit from a base policy set (platform defaults)
+
+    PolicySet:
+      type: object
+      properties:
+        policy_set_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        active_version:
+          type: string
+          nullable: true
+        rules_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PolicySetList:
+      type: object
+      properties:
+        policy_sets:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicySet'
+
+    PolicyRule:
+      type: object
+      properties:
+        rule_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        action_pattern:
+          type: string
+          description: "Glob pattern for matching actions, e.g., card.*, transfer.*"
+        conditions:
+          $ref: '#/components/schemas/RuleConditions'
+        outcome:
+          type: string
+          enum: [allow, deny, step_up, human_approval]
+        priority:
+          type: integer
+          description: Higher priority rules are evaluated first
+        tenant_overridable:
+          type: boolean
+        regulatory_reference:
+          type: string
+          nullable: true
+        enabled:
+          type: boolean
+
+    RuleConditions:
+      type: object
+      properties:
+        min_auth_level:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        max_risk_score:
+          type: number
+          format: float
+        max_autonomy_level:
+          type: string
+          enum: [A0, A1, A2, A3, A4, A5]
+        required_flags:
+          type: array
+          items:
+            type: string
+        excluded_flags:
+          type: array
+          items:
+            type: string
+        jurisdiction:
+          type: string
+          nullable: true
+        time_window:
+          type: object
+          properties:
+            start_hour:
+              type: integer
+            end_hour:
+              type: integer
+            timezone:
+              type: string
+
+    PolicyRuleList:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyRule'
+
+    CreatePolicyRuleRequest:
+      type: object
+      required: [name, action_pattern, conditions, outcome]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        action_pattern:
+          type: string
+        conditions:
+          $ref: '#/components/schemas/RuleConditions'
+        outcome:
+          type: string
+          enum: [allow, deny, step_up, human_approval]
+        priority:
+          type: integer
+        regulatory_reference:
+          type: string
+
+    CreatePolicyVersionRequest:
+      type: object
+      required: [created_by]
+      properties:
+        created_by:
+          type: string
+        change_notes:
+          type: string
+
+    PolicyVersion:
+      type: object
+      properties:
+        version_id:
+          type: string
+        policy_set_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, testing, approved, published, archived]
+        rules_snapshot_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        change_notes:
+          type: string
+
+    PublishPolicyRequest:
+      type: object
+      required: [published_by]
+      properties:
+        published_by:
+          type: string
+        approval_chain:
+          type: array
+          items:
+            type: string
+
+    PublishPolicyResponse:
+      type: object
+      properties:
+        version_id:
+          type: string
+        effective_at:
+          type: string
+          format: date-time
+
+    ActionMatrix:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermittedAction'
+
+    PermittedAction:
+      type: object
+      description: |
+        Represents a permitted (or explicitly prohibited) action within the
+        policy matrix. Entries with autonomy_level A6 exist solely to declare
+        prohibited actions (Principle G7). They will never appear in
+        PolicyEvaluationRequest results and cannot be unlocked by any
+        configuration change. Their presence in the matrix makes the
+        prohibition explicit and auditable.
+      properties:
+        action:
+          type: string
+        description:
+          type: string
+        autonomy_level:
+          type: string
+          enum: [A0, A1, A2, A3, A4, A5, A6]
+          description: |
+            A0-A5 represent operational autonomy levels. A6 is declaration-only
+            and means the action is permanently prohibited. A6 entries never
+            appear in evaluation requests (PolicyEvaluationRequest.autonomy_level
+            caps at A5).
+        required_auth:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        max_risk_score:
+          type: number
+          format: float
+        requires_confirmation:
+          type: boolean
+        requires_human_approval:
+          type: boolean
+        prohibited:
+          type: boolean
+          description: True for A6 actions. These are always prohibited and cannot be overridden.
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

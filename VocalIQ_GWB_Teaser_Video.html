@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VocalIQ - Every Conversation, Connected</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+--bg:#060a13;--bg2:#0a0e17;--surface:#0f1729;--card:#151f32;--card2:#1a2744;
+--border:rgba(56,97,150,0.2);--border2:rgba(56,97,150,0.35);
+--text:#e8edf5;--text2:#94a3b8;--text3:#5a6b82;
+--accent:#4f8ff7;--accent2:#6ea8ff;--accent-glow:rgba(79,143,247,0.12);
+--green:#2dd4a8;--green2:#5eead4;--green-bg:rgba(45,212,168,0.08);--green-border:rgba(45,212,168,0.2);
+--red:#f0615e;--red2:#ff8886;--red-bg:rgba(240,97,94,0.08);--red-border:rgba(240,97,94,0.25);
+--amber:#f5a623;--amber2:#ffc458;--amber-bg:rgba(245,166,35,0.08);--amber-border:rgba(245,166,35,0.25);
+--purple:#a78bfa;--purple2:#c4b5fd;--purple-bg:rgba(167,139,250,0.08);
+--cyan:#22d3ee;--cyan-bg:rgba(34,211,238,0.08);
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);font-family:'Inter',system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+.scene{position:absolute;inset:0;display:flex;flex-direction:column;opacity:0;pointer-events:none;z-index:1;transition:opacity 1.2s cubic-bezier(.4,0,.2,1)}
+.scene.active{opacity:1;pointer-events:auto;z-index:10}
+#sc-title{display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(79,143,247,0.06),transparent 70%),var(--bg)}
+.t-wrap{text-align:center;animation:fadeUp .8s ease both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
+.t-logo{font-size:56px;font-weight:800;letter-spacing:-2px}.t-logo b{color:var(--accent2)}
+.t-sub{font-size:14px;color:var(--text3);letter-spacing:6px;text-transform:uppercase;margin:8px 0 12px}
+.t-tag{font-size:20px;color:var(--text2);font-weight:300;margin-bottom:48px}
+.t-btn{background:var(--accent);color:#fff;border:none;padding:16px 56px;font-size:15px;font-weight:600;border-radius:10px;cursor:pointer;font-family:inherit;transition:all .3s;box-shadow:0 4px 24px rgba(79,143,247,0.3)}
+.t-btn:hover{transform:translateY(-2px);box-shadow:0 8px 40px rgba(79,143,247,0.4)}
+.t-foot{margin-top:48px;font-size:11px;color:var(--text3);letter-spacing:2px}
+.tbar{height:40px;background:rgba(6,10,19,0.92);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;flex-shrink:0;backdrop-filter:blur(24px)}
+.tbar .lg{font-size:14px;font-weight:700}.tbar .lg b{color:var(--accent2)}
+.tbar .lbl{margin-left:auto;font-size:10px;color:var(--text3);letter-spacing:3px;text-transform:uppercase}
+.tbar .badge{margin-left:12px;font-size:9px;padding:2px 8px;border-radius:4px}
+.badge-live{color:var(--green);border:1px solid var(--green-border);background:var(--green-bg);animation:lpulse 2s infinite}
+.badge-corpus{color:var(--accent2);border:1px solid rgba(79,143,247,0.2);background:var(--accent-glow)}
+.badge-warn{color:var(--red2);border:1px solid var(--red-border);background:var(--red-bg)}
+@keyframes lpulse{0%,100%{opacity:1}50%{opacity:.5}}
+.vbar{height:56px;background:rgba(6,10,19,0.95);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;padding:0 48px;flex-shrink:0}
+.vbar .vt{font-size:13px;color:var(--text);font-weight:300;line-height:1.5;text-align:center;max-width:860px}
+.vbar .cur{display:inline-block;width:2px;height:13px;background:var(--accent2);animation:bk .9s infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes bk{0%,50%{opacity:1}51%,100%{opacity:0}}
+.nav{position:fixed;bottom:16px;right:16px;z-index:200;display:flex;gap:5px;opacity:.4;transition:opacity .3s}.nav:hover{opacity:1}
+.nb{width:28px;height:28px;border-radius:5px;border:1px solid var(--border);background:var(--surface);color:var(--text3);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;transition:all .2s;font-family:inherit}.nb:hover{background:var(--card);color:var(--text)}
+.scnt{position:fixed;top:8px;left:10px;z-index:200;font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace}
+.pbar{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,var(--accent),var(--purple));z-index:300;transition:width .6s ease}
+.sbody{flex:1;overflow:hidden;position:relative}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block;animation:pd 2s infinite}.dot.g{background:var(--green)}.dot.r{background:var(--red)}.dot.a{background:var(--amber)}
+@keyframes pd{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* Conversation styles */
+.msg{display:flex;gap:10px;opacity:0;transform:translateY(16px);transition:all .6s cubic-bezier(.4,0,.2,1);margin-bottom:10px}
+.msg.show{opacity:1;transform:translateY(0)}
+.msg-av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0}
+.msg-body{flex:1}.msg-nm{font-size:9px;text-transform:uppercase;letter-spacing:2px;color:var(--text3);margin-bottom:3px}
+.msg-tx{font-size:14px;line-height:1.5;padding:12px 16px;border-radius:12px;background:var(--card);border:1px solid var(--border)}
+.msg.ai .msg-tx{background:var(--accent-glow);border-color:rgba(79,143,247,0.15)}
+.msg.cust .msg-tx{background:var(--green-bg);border-color:var(--green-border)}
+.msg.policy .msg-tx{background:var(--red-bg);border-color:var(--red-border);color:var(--red2);font-size:12px}
+.msg.system .msg-tx{background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber2);font-size:12px}
+
+/* AI insight cards */
+.ins{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;opacity:0;transform:translateX(16px);transition:all .5s cubic-bezier(.4,0,.2,1);margin-bottom:8px}
+.ins.show{opacity:1;transform:translateX(0)}
+.ins.pulse{border-color:rgba(79,143,247,0.3);animation:ipulse 1.5s ease infinite}
+@keyframes ipulse{0%,100%{box-shadow:0 0 0 rgba(79,143,247,0)}50%{box-shadow:0 0 10px rgba(79,143,247,0.12)}}
+.ins-l{font-size:8px;text-transform:uppercase;letter-spacing:2px;color:var(--text3);margin-bottom:2px}
+.ins-v{font-size:12px;font-weight:500}
+.ins-t{display:inline-block;font-size:9px;padding:1px 6px;border-radius:3px;margin-top:3px}
+
+/* Call header */
+.callhd{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border)}
+.calldot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:cdot 1.5s infinite}
+@keyframes cdot{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(45,212,168,0.3)}50%{opacity:.8;box-shadow:0 0 0 4px rgba(45,212,168,0)}}
+.calltm{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text2)}
+
+/* Architecture pipeline */
+.arch-pipeline{display:flex;flex-direction:column;align-items:center;gap:0;padding:16px 0}
+.arch-node{display:flex;align-items:center;gap:12px;padding:10px 20px;border-radius:8px;border:1px solid var(--border);background:var(--surface);min-width:320px;opacity:0;transform:translateY(12px);transition:all .5s ease}
+.arch-node.show{opacity:1;transform:translateY(0)}
+.arch-node.active{border-color:var(--accent);background:rgba(79,143,247,0.06);box-shadow:0 0 20px rgba(79,143,247,0.1)}
+.arch-node.brain{border-color:var(--green);background:rgba(45,212,168,0.06);box-shadow:0 0 24px rgba(45,212,168,0.12)}
+.arch-node .an-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.arch-node .an-name{font-size:13px;font-weight:600}
+.arch-node .an-desc{font-size:10px;color:var(--text3)}
+.arch-node .an-status{margin-left:auto;font-size:9px;padding:2px 8px;border-radius:3px;flex-shrink:0}
+.arch-arrow{width:2px;height:20px;background:var(--border);position:relative;opacity:0;transition:all .4s}
+.arch-arrow.show{opacity:1}
+.arch-arrow.active{background:var(--accent);box-shadow:0 0 8px rgba(79,143,247,0.3)}
+.arch-arrow.active::after{content:'';position:absolute;bottom:-4px;left:-3px;width:8px;height:8px;border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);transform:rotate(45deg)}
+
+/* Data flow animation */
+.data-packet{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);animation:flowDown 1s ease forwards;opacity:0}
+@keyframes flowDown{0%{opacity:1;transform:translateY(-10px)}100%{opacity:0;transform:translateY(10px)}}
+
+/* Hardship */
+.hardship-flash{animation:hflash 2.5s ease}
+@keyframes hflash{0%{background:var(--bg)}10%{background:rgba(240,97,94,0.06)}30%{background:rgba(240,97,94,0.03)}100%{background:var(--bg)}}
+
+/* Blueprint */
+.bp{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;opacity:0;transform:translateY(16px);transition:all .5s ease}
+.bp.show{opacity:1;transform:translateY(0)}
+.bp.live{border-left:3px solid var(--green)}.bp.draft{border-left:3px solid var(--text3);opacity:.6}
+.bp-n{font-size:12px;font-weight:600}.bp-d{font-size:10px;color:var(--text3)}
+.bp-s{font-size:9px;padding:1px 6px;border-radius:3px;display:inline-block;margin-top:3px}
+
+/* Chaos item */
+.chi{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);opacity:0;transform:translateX(-16px);transition:all .4s ease;font-size:12px}
+.chi.show{opacity:1;transform:translateX(0)}
+.chi-icon{width:24px;height:24px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;font-weight:600}
+.chi-time{font-size:10px;color:var(--text3);margin-left:auto;font-family:'JetBrains Mono',monospace;flex-shrink:0}
+
+/* Supervisor */
+.supb{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;opacity:0;transition:all .5s}
+.supb.show{opacity:1}
+
+/* Audit row */
+.arow{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:11px;opacity:0;transform:translateX(-12px);transition:all .4s ease}
+.arow.show{opacity:1;transform:translateX(0)}
+
+/* Metric counter */
+.mc{padding:12px;background:var(--surface);border-radius:6px;border:1px solid var(--border)}
+.mc .ml{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:2px}
+.mc .mv{font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace}
+
+/* Waveform */
+@keyframes wbounce{0%,100%{transform:scaleY(.15);opacity:.25}50%{transform:scaleY(1);opacity:1}}
+
+/* Suggest card */
+.sgc{background:var(--card);border:1px solid rgba(79,143,247,0.2);border-radius:10px;padding:14px 16px;opacity:0;transform:scale(.95);transition:all .5s ease}
+.sgc.show{opacity:1;transform:scale(1)}
+
+/* Compliance inline */
+.comp-inline{display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:5px;font-size:10px;opacity:0;transition:all .5s;margin:4px 0}
+.comp-inline.show{opacity:1}
+.comp-inline.safe{background:var(--green-bg);border:1px solid var(--green-border);color:var(--green2)}
+.comp-inline.blocked{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red2)}
+.comp-inline.caution{background:var(--amber-bg);border:1px solid var(--amber-border);color:var(--amber2)}
+
+/* Multi-conv */
+.conv-hdr{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px}
+.conv-hdr .ch-i{width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff}
+
+/* Finale */
+.fin-wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:40px}
+.fin-h{font-size:36px;font-weight:700;line-height:1.25;margin-bottom:12px}.fin-h b{color:var(--accent2)}
+.fin-s{font-size:15px;color:var(--text2);font-weight:300;max-width:520px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="pbar" id="pbar"></div>
+<div class="scnt" id="scnt"></div>
+<div class="nav"><button class="nb" onclick="prev()">&#9664;</button><button class="nb" onclick="pp()" id="ppb">||</button><button class="nb" onclick="nxt()">&#9654;</button><button class="nb" onclick="mute()">&#9835;</button></div>
+
+<!-- TITLE -->
+<div class="scene active" id="sc-title"><div class="t-wrap"><div class="t-logo">Vocal<b>IQ</b></div><div class="t-sub">Bank-Grade Agentic Voice AI</div><div class="t-tag">Every conversation, connected.</div><button class="t-btn" onclick="go()">Begin Experience</button><div class="t-foot">Servicing. Lending. Responsible Collections. Governed by design.</div></div></div>
+
+<!-- S1: REAL BANKING PRESSURE -->
+<div class="scene" id="sc-1">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">08:00 SGT - Operations Floor</div></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:5px"><span class="dot r"></span> Group Wholesale Banking</div>
+<div class="chi" data-d="200"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">LC</div><span>LC amendment: Orion Mfg, THB 2.4M, SWIFT cut-off 14:00</span><span class="chi-time">07:12</span></div>
+<div class="chi" data-d="500"><div class="chi-icon" style="background:var(--amber-bg);color:var(--amber2)">FX</div><span>Unmatched inward remit SGD 485K, ref mismatch</span><span class="chi-time">07:18</span></div>
+<div class="chi" data-d="800"><div class="chi-icon" style="background:var(--accent-glow);color:var(--accent2)">TF</div><span>BG expiry: ASEAN Logistics, 7 days to renewal</span><span class="chi-time">07:25</span></div>
+<div class="chi" data-d="1100"><div class="chi-icon" style="background:var(--purple-bg);color:var(--purple2)">LN</div><span>Term loan drawdown tranche 2: docs pending</span><span class="chi-time">07:31</span></div>
+<div class="chi" data-d="1400"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">SL</div><span>SLA breach: 3 cases at 95% threshold</span><span class="chi-time">07:38</span></div>
+</div>
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:5px"><span class="dot a"></span> Retail Servicing & Maintenance</div>
+<div class="chi" data-d="300"><div class="chi-icon" style="background:var(--cyan-bg);color:var(--cyan)">AM</div><span>Signatory change: board resolution received, auth pending</span><span class="chi-time">07:14</span></div>
+<div class="chi" data-d="600"><div class="chi-icon" style="background:var(--purple-bg);color:var(--purple2)">UB</div><span>UOB Infinity: corporate user locked out, entitlement mismatch</span><span class="chi-time">07:22</span></div>
+<div class="chi" data-d="900"><div class="chi-icon" style="background:var(--amber-bg);color:var(--amber2)">CD</div><span>Card dispute: unauthorized txn SGD 3,200, merchant Grab</span><span class="chi-time">07:29</span></div>
+<div class="chi" data-d="1200"><div class="chi-icon" style="background:var(--accent-glow);color:var(--accent2)">KY</div><span>KYC refresh overdue: 12 SME accounts flagged by compliance</span><span class="chi-time">07:35</span></div>
+<div class="chi" data-d="1500"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">CM</div><span>Complaint inbound: customer escalation, 2nd call today</span><span class="chi-time">07:42</span></div>
+</div>
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;display:flex;align-items:center;gap:5px"><span class="dot r"></span> Collections & Recovery</div>
+<div class="chi" data-d="400"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">60</div><span>14 accounts past 60 DPD, total exposure SGD 168K</span><span class="chi-time">07:00</span></div>
+<div class="chi" data-d="700"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">BP</div><span>28 broken PTP from prior cycle, callbacks required</span><span class="chi-time">07:00</span></div>
+<div class="chi" data-d="1000"><div class="chi-icon" style="background:var(--amber-bg);color:var(--amber2)">EA</div><span>89 early arrears (1-30 DPD), batch outbound eligible</span><span class="chi-time">07:10</span></div>
+<div class="chi" data-d="1300"><div class="chi-icon" style="background:var(--red-bg);color:var(--red2)">VF</div><span>3 vulnerability flags: hardship indicators detected</span><span class="chi-time">07:15</span></div>
+<div class="chi" data-d="1600"><div class="chi-icon" style="background:var(--amber-bg);color:var(--amber2)">RF</div><span>Reg F compliance review: 5 accounts near contact cap</span><span class="chi-time">07:20</span></div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo1"></div></div>
+</div>
+
+<!-- S2: LIVE CALL - Trade Finance with real terminology -->
+<div class="scene" id="sc-2">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">Live Call - GWB Trade Finance</div><div class="badge badge-live">Live</div><div class="badge badge-corpus">Bank Corpus</div></div>
+<div class="callhd"><div class="calldot"></div><span style="font-size:11px;color:var(--green2)">Connected</span><div class="calltm" id="s2tm">00:00</div><span style="font-size:10px;color:var(--text3);padding:2px 8px;border:1px solid var(--border);border-radius:3px;margin-left:8px">SIP/TLS - Inbound</span><span style="margin-left:auto;font-size:10px;color:var(--accent2)">AUTH_2 Verified - James Tan, Treasurer</span></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 300px;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div style="height:64px;padding:8px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px">
+<div style="flex:1;height:100%;display:flex;align-items:center;justify-content:center;gap:3px" id="s2wv"></div>
+<div style="text-align:right;font-size:10px;color:var(--text3)"><div style="color:var(--green2);font-weight:500">Orion Manufacturing Group</div>Strategic - ASEAN + Greater China | SGD 2.4M annual</div>
+</div>
+<div style="flex:1;overflow:hidden;padding:14px 18px;display:flex;flex-direction:column" id="s2tx">
+<div class="msg cust" data-d="800"><div class="msg-av" style="background:linear-gradient(135deg,var(--green),#2a9d8f)">JT</div><div class="msg-body"><div class="msg-nm">James Tan - Orion Manufacturing, Treasurer</div><div class="msg-tx">Mira, the LC amendment for the Thailand order needs to go through today. We changed the shipment date to June 15th and the amount needs adjusting from 2.2 to 2.4 million baht. SWIFT cut-off is 14:00 and we can't miss it.</div></div></div>
+<div class="msg cust" data-d="4000"><div class="msg-av" style="background:linear-gradient(135deg,var(--green),#2a9d8f)">JT</div><div class="msg-body"><div class="msg-nm">James Tan</div><div class="msg-tx">And the SGD 485K inward remittance from Sumitomo, reference TT-2026-0412. It's been four days and our treasury can't reconcile.</div></div></div>
+<div class="msg ai" data-d="7000"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ - Real-time Classification</div><div class="msg-tx" style="font-size:12px;color:var(--accent2)">2 intents extracted. Intent 1: LC amendment (Trade Servicing, A3 autonomy, requires human approval before SWIFT submission). Intent 2: Unmatched remittance (Cash Management, A2 read-only, trace and report).</div></div></div>
+</div>
+</div>
+<div style="background:var(--surface);display:flex;flex-direction:column">
+<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--accent2);text-transform:uppercase;letter-spacing:2px">Pipeline Analysis</div>
+<div style="flex:1;overflow:hidden;padding:10px 12px;display:flex;flex-direction:column;gap:6px" id="s2pnl">
+<div class="ins" data-d="500"><div class="ins-l">Speech Layer</div><div class="ins-v">VAD: Active | STT: Streaming | Lang: EN-SG</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">PII Redacted</div></div>
+<div class="ins pulse" data-d="1500"><div class="ins-l">Caller Verified</div><div class="ins-v" style="color:var(--green2)">James Tan - AUTH_2</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Voice match 94%</div></div>
+<div class="ins pulse" data-d="3000"><div class="ins-l">Intent #1</div><div class="ins-v">LC Amendment - THB 2.4M</div><div class="ins-t" style="background:var(--red-bg);color:var(--red2)">A3: Draft, human approve</div></div>
+<div class="ins" data-d="4500"><div class="ins-l">Intent #2</div><div class="ins-v">Remittance Trace - SGD 485K</div><div class="ins-t" style="background:var(--accent-glow);color:var(--accent2)">A2: Read-only</div></div>
+<div class="ins" data-d="6000"><div class="ins-l">Policy Engine</div><div class="ins-v">LC value change > threshold</div><div class="ins-t" style="background:var(--amber-bg);color:var(--amber2)">A5: Supervisor approval</div></div>
+<div class="ins" data-d="7500"><div class="ins-l">Workflow</div><div class="ins-v">Dual-track: Trade + Cash Mgmt</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Graph loaded</div></div>
+<div class="ins" data-d="8500"><div class="ins-l">RAG Source</div><div class="ins-v">GWB Trade corpus v3.2</div><div class="ins-t" style="background:var(--accent-glow);color:var(--accent2)">Bank-approved only</div></div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo2"></div></div>
+</div>
+
+<!-- S3: THE ARCHITECTURE - Animated pipeline -->
+<div class="scene" id="sc-3">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">How It Works - Pipeline Architecture</div><div class="badge badge-corpus">The Governance Difference</div></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 340px;gap:1px;background:var(--border)">
+<!-- Left: Animated pipeline -->
+<div style="background:var(--bg);padding:12px 24px;display:flex;flex-direction:column;justify-content:center;overflow:hidden">
+<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;text-align:center">Data Flow: Voice to Governed Action</div>
+<div class="arch-pipeline" id="archpipe">
+<div class="arch-node" data-d="300" id="an1"><div class="an-icon" style="background:var(--card);border:1px solid var(--border)">SIP</div><div><div class="an-name">Media Gateway</div><div class="an-desc">SIP/WebRTC termination, call recording, region pinning</div></div><div class="an-status" style="background:var(--green-bg);color:var(--green2)">Secure</div></div>
+<div class="arch-arrow" data-d="500" id="aa1"></div>
+<div class="arch-node" data-d="700" id="an2"><div class="an-icon" style="background:var(--purple-bg);border:1px solid rgba(167,139,250,0.2)">STT</div><div><div class="an-name">Speech Layer</div><div class="an-desc">VAD, streaming ASR, PII/PCI redaction before AI sees anything</div></div><div class="an-status" style="background:var(--green-bg);color:var(--green2)">Redacted</div></div>
+<div class="arch-arrow" data-d="900" id="aa2"></div>
+<div class="arch-node" data-d="1100" id="an3"><div class="an-icon" style="background:var(--accent-glow);border:1px solid rgba(79,143,247,0.2)">RT</div><div><div class="an-name">Conversation Runtime</div><div class="an-desc">Graph state machine, slot extraction, deterministic control flow</div></div><div class="an-status" style="background:var(--accent-glow);color:var(--accent2)">Graph</div></div>
+<div class="arch-arrow" data-d="1300" id="aa3"></div>
+<div class="arch-node" data-d="1500" id="an4" style="min-width:360px"><div class="an-icon" style="background:rgba(45,212,168,0.12);border:1px solid var(--green-border);font-size:16px">PE</div><div><div class="an-name" style="color:var(--green2);font-size:14px">Policy & Risk Engine</div><div class="an-desc">Authentication rules, action ACLs, fraud thresholds, conduct rules, vulnerability triggers, jurisdiction constraints. Every AI decision passes through here.</div></div><div class="an-status" style="background:var(--green-bg);color:var(--green2);font-weight:600">The Brain</div></div>
+<div class="arch-arrow" data-d="1700" id="aa4"></div>
+<div class="arch-node" data-d="1900" id="an5"><div class="an-icon" style="background:var(--amber-bg);border:1px solid var(--amber-border)">TG</div><div><div class="an-name">Tool Execution Gateway</div><div class="an-desc">Scoped permissions, schema validation, two-phase confirm, replay protection</div></div><div class="an-status" style="background:var(--amber-bg);color:var(--amber2)">Gated</div></div>
+<div class="arch-arrow" data-d="2100" id="aa5"></div>
+<div class="arch-node" data-d="2300" id="an6"><div class="an-icon" style="background:var(--card);border:1px solid var(--border)">CB</div><div><div class="an-name">Core Banking Systems</div><div class="an-desc">CRM, T24/Finacle, Card Processor, Fraud, Collections, Case Mgmt</div></div><div class="an-status" style="background:var(--accent-glow);color:var(--accent2)">Isolated</div></div>
+</div>
+</div>
+<!-- Right: Why this matters -->
+<div style="background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:10px">
+<div style="font-size:9px;color:var(--green2);text-transform:uppercase;letter-spacing:2px;margin-bottom:4px">Why Pipeline, Not Speech-to-Speech</div>
+<div class="ins" data-d="2500"><div class="ins-l">Control Point 1</div><div class="ins-v">PII/PCI stripped before AI</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Card numbers never reach LLM</div></div>
+<div class="ins" data-d="3000"><div class="ins-l">Control Point 2</div><div class="ins-v">Policy check before every action</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">&lt; 50ms per decision</div></div>
+<div class="ins" data-d="3500"><div class="ins-l">Control Point 3</div><div class="ins-v">Tool Gateway: scoped, validated, reversible</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Two-phase execution</div></div>
+<div class="ins" data-d="4000"><div class="ins-l">Control Point 4</div><div class="ins-v">Tamper-evident audit at every boundary</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Cryptographic hash chain</div></div>
+
+<div style="margin-top:auto">
+<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px">Sidecar Services</div>
+<div class="ins" data-d="4500"><div class="ins-l">Audit Ledger</div><div class="ins-v">Append-only, tamper-evident, MAS TRM compliant</div></div>
+<div class="ins" data-d="5000"><div class="ins-l">Fraud-Aware Identity</div><div class="ins-v">Voice liveness, caller risk scoring, multi-session correlation</div></div>
+<div class="ins" data-d="5500"><div class="ins-l">Human Control Center</div><div class="ins-v">Real-time monitoring, takeover, approval queues</div></div>
+<div class="ins" data-d="6000"><div class="ins-l">Evaluation Lab</div><div class="ins-v">Adversarial testing, golden call suites, release gates</div></div>
+</div>
+
+<div style="padding:8px 10px;border-radius:6px;background:rgba(45,212,168,0.04);border:1px solid var(--green-border);font-size:10px;color:var(--green2);margin-top:8px;opacity:0;transition:all .5s" data-d="6500" id="s3diff">Competitors using speech-to-speech cannot enforce policy at this granularity. The pipeline IS the governance.</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo3"></div></div>
+</div>
+
+<!-- S4: RM GETS AI RESPONSE - Policy blocks one, approves another -->
+<div class="scene" id="sc-4">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">RM Workbench - Policy in Action</div><div class="badge badge-live">Live Assist</div></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 360px;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div class="callhd" style="padding:8px 16px"><div class="calldot"></div><span style="font-size:11px;color:var(--green2)">Active</span><div class="calltm" id="s4tm">02:14</div><div style="margin-left:auto;display:flex;align-items:center;gap:6px"><div class="msg-av" style="width:24px;height:24px;font-size:9px;background:linear-gradient(135deg,var(--amber),#e76f51)">MT</div><span style="font-size:11px">Mira Tan, RM</span></div></div>
+<div style="flex:1;overflow:hidden;padding:14px 18px;display:flex;flex-direction:column" id="s4tx">
+<div class="msg cust" data-d="300"><div class="msg-av" style="background:linear-gradient(135deg,var(--green),#2a9d8f)">JT</div><div class="msg-body"><div class="msg-nm">James Tan</div><div class="msg-tx">Can you also confirm the covenant ratio on the term loan? Our CFO is asking before the board meeting Thursday.</div></div></div>
+<div class="msg policy" data-d="2500"><div class="msg-av" style="background:var(--red);width:32px;height:32px;font-size:11px">PE</div><div class="msg-body"><div class="msg-nm">Policy Engine - Action Blocked</div><div class="msg-tx">Covenant ratio disclosure requires AUTH_3 (step-up authentication). Current session: AUTH_2. Reason: financial covenant data classified as credit-sensitive under bank policy BP-LN-042. Remediation: request step-up via OTP or callback verification.</div></div></div>
+<div class="msg ai" data-d="5000"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ - Approved Response (A2 Safe)</div><div class="msg-tx">James, the LC amendment documents are complete. Trade team has confirmed eligibility for same-day SWIFT processing. I'll need supervisor sign-off on the value change from 2.2M to 2.4M baht. On the remittance, we've traced TT-2026-0412 to a beneficiary reference mismatch. Cash management is correcting it now, settlement expected by 16:00 SGT.</div></div></div>
+<div class="msg system" data-d="7500"><div class="msg-av" style="background:var(--amber);width:32px;height:32px;font-size:11px">A5</div><div class="msg-body"><div class="msg-nm">Supervisor Queue</div><div class="msg-tx">LC value amendment (THB +200K) queued for supervisor approval. Ref: TRD-2026-0587. Approver: Senior Trade Ops.</div></div></div>
+</div>
+</div>
+<div style="background:var(--surface);display:flex;flex-direction:column;padding:14px">
+<div style="font-size:9px;color:var(--accent2);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px">Policy Decisions This Call</div>
+<div class="ins" data-d="1000"><div class="ins-l">Remittance Trace</div><div class="ins-v">A2 Read-only: Allowed</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">No write action</div></div>
+<div class="ins" data-d="2000"><div class="ins-l">Covenant Ratio</div><div class="ins-v" style="color:var(--red2)">BLOCKED: AUTH_3 required</div><div class="ins-t" style="background:var(--red-bg);color:var(--red2)">Credit-sensitive data</div></div>
+<div class="ins" data-d="3500"><div class="ins-l">LC Amendment</div><div class="ins-v">A3 Draft: Prepared</div><div class="ins-t" style="background:var(--amber-bg);color:var(--amber2)">A5 approval queued</div></div>
+<div class="ins" data-d="5500"><div class="ins-l">Response Grounding</div><div class="ins-v">GWB Trade corpus v3.2 only</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">No hallucination risk</div></div>
+
+<div style="margin-top:auto">
+<div class="sgc" data-d="5500" id="s4sg">
+<div style="font-size:9px;color:var(--accent2);text-transform:uppercase;letter-spacing:2px;margin-bottom:4px;display:flex;align-items:center;gap:5px"><span class="dot g"></span> RM Action</div>
+<div style="font-size:12px;color:var(--text2);margin-bottom:8px">Review AI-prepared response. Covenant question redirected to secure callback.</div>
+<div style="display:flex;gap:6px"><button style="font-size:10px;padding:5px 14px;border-radius:5px;border:none;background:var(--green);color:#fff;font-family:inherit;cursor:pointer" id="s4btn">Approve & Send</button><button style="font-size:10px;padding:5px 14px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text2);font-family:inherit;cursor:pointer">Edit</button></div>
+</div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo4"></div></div>
+</div>
+
+<!-- S5: MULTI-LANE with real banking scenarios -->
+<div class="scene" id="sc-5">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">Simultaneous Conversations</div><div class="badge badge-live">4 Active</div><div class="badge badge-corpus">Same Platform</div></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column;overflow:hidden">
+<div class="conv-hdr"><div class="ch-i" style="background:var(--cyan)">AM</div><span style="font-weight:500">Account Maintenance</span><span style="margin-left:auto;font-size:9px;color:var(--amber2)">A5: Human-approved</span></div>
+<div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+<div class="msg cust" data-d="400" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--green),#2a9d8f)">LK</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">Board resolution uploaded. New signatory is our incoming CFO, effective June 1st.</div></div></div>
+<div class="msg ai" data-d="2400" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">Resolution verified. Identity docs matched. Routing to maker-checker for dual-authority sign-off.</div></div></div>
+<div class="comp-inline caution" data-d="3500" style="font-size:9px">A6 prohibited: AI cannot change signatory directly. Human execution required.</div>
+</div>
+</div>
+<div style="background:var(--bg);display:flex;flex-direction:column;overflow:hidden">
+<div class="conv-hdr"><div class="ch-i" style="background:var(--accent)">LS</div><span style="font-weight:500">Loan Servicing</span><span style="margin-left:auto;font-size:9px;color:var(--green2)">A2: Read-only</span></div>
+<div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+<div class="msg cust" data-d="600" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--green),#2a9d8f)">WC</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">What's the remaining tenor on our revolving facility? And can you send the repayment schedule?</div></div></div>
+<div class="msg ai" data-d="2800" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">Remaining tenor: 18 months. Repayment schedule attached to secure portal. Covenant certificate due in 14 days.</div></div></div>
+<div class="comp-inline safe" data-d="4000" style="font-size:9px">Disclosure approved. No credit decision. Policy BP-LN-015 satisfied.</div>
+</div>
+</div>
+<div style="background:var(--bg);display:flex;flex-direction:column;overflow:hidden">
+<div class="conv-hdr"><div class="ch-i" style="background:var(--purple)">CD</div><span style="font-weight:500">Card Dispute</span><span style="margin-left:auto;font-size:9px;color:var(--amber2)">A3: Draft case</span></div>
+<div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+<div class="msg cust" data-d="800" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--green),#2a9d8f)">NL</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">I didn't make this Grab transaction for $3,200. I was overseas and my card was with me.</div></div></div>
+<div class="msg ai" data-d="3200" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">Dispute case created. Card flagged for monitoring. Provisional credit timeline: 5 business days per MAS guidelines. Fraud team notified.</div></div></div>
+<div class="comp-inline caution" data-d="4200" style="font-size:9px">A3: Case created for human review. No refund issued by AI.</div>
+</div>
+</div>
+<div style="background:var(--bg);display:flex;flex-direction:column;overflow:hidden">
+<div class="conv-hdr"><div class="ch-i" style="background:var(--amber)">RC</div><span style="font-weight:500">Collections Outbound</span><span style="margin-left:auto;font-size:9px;color:var(--accent2)">AI supervised</span></div>
+<div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+<div class="msg ai" data-d="1000" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">312 accounts analyzed. 6 eligible for supervised AI call (early arrears, low risk, high contactability). 3 flagged vulnerability: human only.</div></div></div>
+<div class="msg ai" data-d="3400" style="font-size:11px;margin-bottom:0"><div class="msg-av" style="width:24px;height:24px;font-size:8px;background:linear-gradient(135deg,var(--cyan),var(--accent))">LA</div><div class="msg-body"><div class="msg-tx" style="font-size:11px;padding:8px 10px">Batch approved. Reg F contact cap checked. TCPA consent verified. Hardship detection: active.</div></div></div>
+<div class="comp-inline safe" data-d="4400" style="font-size:9px">Approved scripts loaded. FDCPA/Reg F compliant. Supervisor monitoring.</div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo5"></div></div>
+</div>
+
+<!-- S6: AI VOICE CALL - Collections with regulatory precision -->
+<div class="scene" id="sc-6">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">AI Voice - Collections Call</div><div class="badge badge-live">Live</div><div class="badge badge-corpus">Approved Script</div></div>
+<div class="callhd"><div class="calldot"></div><span style="font-size:11px;color:var(--green2)">AI Voice Active</span><div class="calltm" id="s6tm">00:00</div><span style="font-size:10px;color:var(--text3);padding:2px 8px;border:1px solid var(--border);border-radius:3px;margin-left:8px">Outbound - Early Arrears</span><span style="margin-left:auto;font-size:10px;color:var(--amber2)">Priya Raman supervising</span></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 260px;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column">
+<div style="height:80px;padding:0 20px;border-bottom:1px solid var(--border);display:flex;align-items:center"><div style="flex:1;height:56px;display:flex;align-items:center;justify-content:center;gap:3px" id="s6wv"></div></div>
+<div style="flex:1;overflow:hidden;padding:12px 16px;display:flex;flex-direction:column" id="s6tx">
+<div class="msg ai" data-d="800"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ AI Voice</div><div class="msg-tx">Good morning. Am I speaking with Sarah Lim?</div></div></div>
+<div class="msg cust" data-d="2500"><div class="msg-av" style="background:linear-gradient(135deg,var(--green),#2a9d8f)">SL</div><div class="msg-body"><div class="msg-nm">Sarah Lim</div><div class="msg-tx">Yes, this is Sarah.</div></div></div>
+<div class="msg ai" data-d="4500"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ AI Voice</div><div class="msg-tx">Thank you, Sarah. I'm calling from UOB regarding your account. We noticed a payment was scheduled for the 1st of this month. Would you be able to arrange payment this week?</div></div></div>
+<div class="msg cust" data-d="7500"><div class="msg-av" style="background:linear-gradient(135deg,var(--green),#2a9d8f)">SL</div><div class="msg-body"><div class="msg-nm">Sarah Lim</div><div class="msg-tx">Oh right, I forgot about that. Yes, I can pay on Friday.</div></div></div>
+<div class="msg ai" data-d="9500"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ AI Voice</div><div class="msg-tx">Thank you. I've noted your intention to pay by Friday. You can make the payment through UOB internet banking or at any branch. Is there anything else I can help with today?</div></div></div>
+</div>
+</div>
+<div style="background:var(--surface);display:flex;flex-direction:column;padding:10px;gap:6px">
+<div style="font-size:8px;color:var(--accent2);text-transform:uppercase;letter-spacing:2px;margin-bottom:2px">Compliance Layer</div>
+<div class="ins" data-d="1200"><div class="ins-l">Right-Party Check</div><div class="ins-v" style="color:var(--green2)">Confirmed</div></div>
+<div class="ins" data-d="3000"><div class="ins-l">TCPA Consent</div><div class="ins-v" style="color:var(--green2)">Valid - Opt-in 2025-11</div></div>
+<div class="ins" data-d="5000"><div class="ins-l">Script Mode</div><div class="ins-v">Approved reminder</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Compliant</div></div>
+<div class="ins" data-d="6000"><div class="ins-l">Disclosure</div><div class="ins-v">Amount withheld until RPV</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">FDCPA safe</div></div>
+<div class="ins" data-d="8000"><div class="ins-l">Outcome</div><div class="ins-v" style="color:var(--green2)">PTP: Friday</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">Captured</div></div>
+<div class="ins" data-d="10000"><div class="ins-l">Payment Channel</div><div class="ins-v">Secure bank channel</div><div class="ins-t" style="background:var(--green-bg);color:var(--green2)">No card details</div></div>
+<div style="margin-top:auto">
+<div class="supb" data-d="1500" id="s6sup"><div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--red));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0">PR</div><div><div style="font-size:11px;font-weight:500">Priya Raman</div><div style="font-size:9px;color:var(--text3)">Supervisor monitoring</div></div></div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo6"></div></div>
+</div>
+
+<!-- S7: HARDSHIP -->
+<div class="scene" id="sc-7">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">Vulnerability Detection</div><div class="badge badge-warn">Hardship Protocol</div></div>
+<div class="callhd" style="border-bottom-color:var(--red-border)"><div class="calldot" style="background:var(--red)"></div><span style="font-size:11px;color:var(--red2)">Escalating</span><div class="calltm" id="s7tm">01:12</div></div>
+<div class="sbody hardship-flash" style="display:grid;grid-template-columns:1fr 320px;gap:1px;background:var(--border)">
+<div style="background:var(--bg);display:flex;flex-direction:column;padding:20px 24px;justify-content:center">
+<div class="msg ai" data-d="200" style="margin-bottom:12px"><div class="msg-av" style="background:linear-gradient(135deg,var(--accent),var(--purple))">VQ</div><div class="msg-body"><div class="msg-nm">VocalIQ AI Voice</div><div class="msg-tx">I understand. Would you like to discuss payment options that might work better for you?</div></div></div>
+<div class="msg cust" data-d="1800" style="margin-bottom:16px"><div class="msg-av" style="background:linear-gradient(135deg,var(--red),#c0392b)">AH</div><div class="msg-body"><div class="msg-nm">Ahmad Hassan</div><div class="msg-tx" style="font-size:17px;font-weight:300;line-height:1.6;border-color:var(--red-border);background:var(--red-bg)" id="s7q"></div></div></div>
+<div style="opacity:0;transition:all .8s" id="s7react">
+<div style="display:flex;align-items:center;gap:10px;padding:14px 16px;background:var(--red-bg);border:1px solid var(--red-border);border-radius:10px">
+<div style="width:36px;height:36px;border-radius:50%;background:var(--red-bg);border:2px solid var(--red);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">!</div>
+<div><div style="font-size:13px;font-weight:600;color:var(--red2)">Vulnerability trigger activated</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Policy Engine: collection pressure disabled. Human specialist required. MAS consumer protection guidelines apply.</div></div>
+</div>
+</div>
+</div>
+<div style="background:var(--surface);display:flex;flex-direction:column;padding:16px;justify-content:center">
+<div style="font-size:9px;color:var(--red2);text-transform:uppercase;letter-spacing:2px;margin-bottom:14px;opacity:0" id="s7sig"><span class="dot r"></span> Automation Stopped</div>
+<div class="ins" data-d="4000"><div class="ins-l">AI Status</div><div class="ins-v" style="color:var(--red2)">PAUSED</div></div>
+<div class="ins" data-d="4500"><div class="ins-l">Collection Script</div><div class="ins-v" style="color:var(--red2)">DISABLED</div></div>
+<div class="ins" data-d="5000"><div class="ins-l">Escalation</div><div class="ins-v" style="color:var(--amber2)">Hardship specialist</div></div>
+<div class="ins" data-d="5500"><div class="ins-l">Context Transfer</div><div class="ins-v" style="color:var(--green2)">Full transcript + sentiment</div></div>
+<div class="ins" data-d="6000"><div class="ins-l">Account Flag</div><div class="ins-v" style="color:var(--red2)">Vulnerability: SET</div></div>
+<div class="ins" data-d="6500"><div class="ins-l">Future Contact</div><div class="ins-v">AI outbound: suspended</div></div>
+<div style="margin-top:14px">
+<div class="supb" data-d="7000" id="s7sup"><div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--red));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0">PR</div><div><div style="font-size:11px;font-weight:500">Priya Raman</div><div style="font-size:9px;color:var(--text3)">Taking over with full context</div></div></div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo7"></div></div>
+</div>
+
+<!-- S8: CONTROL + AUDIT + BLUEPRINT (compressed) -->
+<div class="scene" id="sc-8">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">Governance Layer</div><div class="badge badge-corpus">Complete Auditability</div></div>
+<div class="sbody" style="display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:1px;background:var(--border)">
+<!-- Control Center -->
+<div style="background:var(--bg);padding:12px 16px;display:flex;flex-direction:column">
+<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;display:flex;align-items:center;gap:5px"><span class="dot g"></span> Control Center</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+<div class="mc"><div class="ml">AI Calls</div><div class="mv" style="color:var(--green2)" data-count="8">0</div></div>
+<div class="mc"><div class="ml">Escalations</div><div class="mv" style="color:var(--amber2)" data-count="3">0</div></div>
+</div>
+<div class="chi" data-d="600" style="font-size:11px"><span style="color:var(--green2);font-size:9px;font-weight:600;width:50px;flex-shrink:0">OK</span><span>LC amendment: approved, SWIFT submitted</span></div>
+<div class="chi" data-d="900" style="font-size:11px"><span style="color:var(--red2);font-size:9px;font-weight:600;width:50px;flex-shrink:0">BLOCK</span><span>Covenant disclosure: auth insufficient</span></div>
+<div class="chi" data-d="1200" style="font-size:11px"><span style="color:var(--amber2);font-size:9px;font-weight:600;width:50px;flex-shrink:0">A5</span><span>Signatory change: dual-auth pending</span></div>
+</div>
+<!-- Audit -->
+<div style="background:var(--bg);padding:12px 16px;display:flex;flex-direction:column">
+<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px">Tamper-Evident Audit Ledger</div>
+<div class="arow" data-d="400"><span style="color:var(--text3);font-family:'JetBrains Mono',monospace;width:42px;font-size:10px;flex-shrink:0">07:12</span><span style="color:var(--accent2);width:40px;flex-shrink:0;font-size:9px">GWB</span><span style="flex:1;font-size:10px">Call captured, 2 intents routed</span><span style="font-size:9px;color:var(--green2)">Hash: a3f2</span></div>
+<div class="arow" data-d="650"><span style="color:var(--text3);font-family:'JetBrains Mono',monospace;width:42px;font-size:10px;flex-shrink:0">07:14</span><span style="color:var(--red2);width:40px;flex-shrink:0;font-size:9px">POL</span><span style="flex:1;font-size:10px">Covenant disclosure blocked (AUTH_2 < AUTH_3)</span><span style="font-size:9px;color:var(--red2)">Hash: b7e1</span></div>
+<div class="arow" data-d="900"><span style="color:var(--text3);font-family:'JetBrains Mono',monospace;width:42px;font-size:10px;flex-shrink:0">08:00</span><span style="color:var(--purple2);width:40px;flex-shrink:0;font-size:9px">LN</span><span style="flex:1;font-size:10px">Repayment schedule served (A2)</span><span style="font-size:9px;color:var(--green2)">Hash: c4d8</span></div>
+<div class="arow" data-d="1150"><span style="color:var(--text3);font-family:'JetBrains Mono',monospace;width:42px;font-size:10px;flex-shrink:0">09:10</span><span style="color:var(--amber2);width:40px;flex-shrink:0;font-size:9px">COL</span><span style="flex:1;font-size:10px">AI call: PTP captured (Sarah Lim)</span><span style="font-size:9px;color:var(--green2)">Hash: d9f3</span></div>
+<div class="arow" data-d="1400"><span style="color:var(--text3);font-family:'JetBrains Mono',monospace;width:42px;font-size:10px;flex-shrink:0">09:25</span><span style="color:var(--red2);width:40px;flex-shrink:0;font-size:9px">COL</span><span style="flex:1;font-size:10px">Hardship: automation stopped, human takeover</span><span style="font-size:9px;color:var(--red2)">Hash: e2a7</span></div>
+</div>
+<!-- Blueprints -->
+<div style="background:var(--bg);padding:12px 16px;display:flex;flex-direction:column;grid-column:1/3">
+<div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px">Blueprint Catalog - Same Governed Platform, Different Use Cases</div>
+<div style="display:grid;grid-template-columns:repeat(5,1fr) repeat(5,1fr);gap:8px">
+<div class="bp live" data-d="300"><div class="bp-n">GWB Servicing</div><div class="bp-s" style="background:var(--green-bg);color:var(--green2)">Live</div></div>
+<div class="bp live" data-d="450"><div class="bp-n">Account Maint.</div><div class="bp-s" style="background:var(--green-bg);color:var(--green2)">Live</div></div>
+<div class="bp live" data-d="600"><div class="bp-n">Loan Servicing</div><div class="bp-s" style="background:var(--green-bg);color:var(--green2)">Live</div></div>
+<div class="bp live" data-d="750"><div class="bp-n">Card Disputes</div><div class="bp-s" style="background:var(--green-bg);color:var(--green2)">Live</div></div>
+<div class="bp live" data-d="900"><div class="bp-n">Collections</div><div class="bp-s" style="background:var(--green-bg);color:var(--green2)">Live</div></div>
+<div class="bp draft" data-d="1600"><div class="bp-n">Fraud Alerts</div><div class="bp-s" style="background:var(--accent-glow);color:var(--accent2)">Pilot</div></div>
+<div class="bp draft" data-d="1750"><div class="bp-n">Complaints</div><div class="bp-s" style="background:var(--amber-bg);color:var(--amber2)">Review</div></div>
+<div class="bp draft" data-d="1900"><div class="bp-n">Onboarding</div><div class="bp-s" style="background:var(--accent-glow);color:var(--accent2)">Draft</div></div>
+<div class="bp draft" data-d="2050"><div class="bp-n">Wealth</div><div class="bp-s" style="background:var(--accent-glow);color:var(--accent2)">Draft</div></div>
+<div class="bp draft" data-d="2200"><div class="bp-n">SME Servicing</div><div class="bp-s" style="background:var(--accent-glow);color:var(--accent2)">Draft</div></div>
+</div>
+</div>
+</div>
+<div class="vbar"><div class="vt" id="vo8"></div></div>
+</div>
+
+<!-- S9: FINALE -->
+<div class="scene" id="sc-9">
+<div class="tbar"><div class="lg">Vocal<b>IQ</b></div><div class="lbl">Every Conversation, Connected</div></div>
+<div class="sbody"><div class="fin-wrap"><div class="fin-h">Every conversation,<br><b>connected.</b></div><div class="fin-s" style="margin-bottom:28px">Bank-grade Agentic Voice AI for servicing, lending, and responsible collections. Governed by design.</div><div style="display:flex;gap:20px;font-size:11px;color:var(--text3);margin-bottom:32px"><span>Pipeline Architecture</span><span style="color:var(--border2)">|</span><span>Policy-first Governance</span><span style="color:var(--border2)">|</span><span>Tamper-evident Audit</span><span style="color:var(--border2)">|</span><span>Human Authority</span></div><div style="font-size:10px;color:var(--text3);letter-spacing:1px">MAS TRM | PCI DSS | FDCPA | TCPA | SOC 2 | ISO 27001</div></div></div>
+<div class="vbar"><div class="vt" id="vo9"></div></div>
+</div>
+
+<script>
+const SC=['sc-title','sc-1','sc-2','sc-3','sc-4','sc-5','sc-6','sc-7','sc-8','sc-9'];
+let ci=0,paused=false,actx=null,atm=null,tmrs={};
+const VO={
+'sc-1':"In banking, every day begins with conversations that carry real operational risk. An LC amendment against a SWIFT cut-off. An unmatched remittance blocking treasury reconciliation. A card dispute under MAS timelines. An overdue collections queue with vulnerability flags. Every signal demands context, policy, and speed.",
+'sc-2':"VocalIQ listens to the call in real time. The speech layer streams transcription, strips PII before the AI sees anything, and feeds clean text to the conversation runtime. Two intents from one call, both classified with autonomy levels. The LC amendment is flagged A3, draft only, because the value change exceeds threshold and needs supervisor sign-off. The remittance trace is A2, read-only, safe to serve.",
+'sc-3':"This is how it works. A pipeline, not speech-to-speech. Every stage is a control point. PII is stripped before the model. Every action passes through the policy engine. The tool gateway enforces scoped permissions with two-phase execution. And a tamper-evident audit ledger records every decision with cryptographic hashing. Competitors using speech-to-speech cannot enforce policy at this granularity. The pipeline is the governance.",
+'sc-4':"The Relationship Manager doesn't start from scratch. VocalIQ prepared the response, grounded it in the bank's own trade corpus, and checked every disclosure against policy. The covenant ratio question was blocked because the session hasn't reached AUTH_3. No workaround. No override. The policy engine is the law. The RM reviews, approves, and delivers.",
+'sc-5':"Across the bank, the same platform is handling four different conversation types simultaneously. Account maintenance routing a signatory change through maker-checker. Loan servicing providing a repayment schedule at A2 read-only. A card dispute creating a case at A3 for human review. And collections preparing a supervised AI outbound batch with TCPA consent verified and Reg F contact caps checked.",
+'sc-6':"For low-risk early-stage arrears, VocalIQ handles the call directly. Right-party verification before any disclosure. Approved script. Amount withheld until identity is confirmed, as required under FDCPA. The customer agrees to pay Friday. Promise-to-pay captured. Secure bank channel only. No card details taken. Supervisor monitoring throughout.",
+'sc-7':"When the customer shows hardship or vulnerability, the system does not push harder. The policy engine activates the vulnerability trigger immediately. Collection script disabled. AI outbound suspended on this account. A trained human specialist takes over with the full transcript and sentiment analysis attached. This is not a feature. It is a principle built into the architecture.",
+'sc-8':"Every decision is traceable in a tamper-evident ledger. What was heard, what was classified, which policy applied, what was blocked, who approved, and what happened next. No black boxes. And as new use cases emerge, the bank does not start from zero. New blueprints are built from the same governed platform.",
+'sc-9':"VocalIQ. Every conversation, connected. Bank-grade agentic voice AI for servicing, lending, and responsible collections."
+};
+const DUR=[0,11000,16000,18000,16000,15000,15000,16000,14000,10000];
+function fmtT(s){return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function startT(id,st){let s=st||0;const el=document.getElementById(id);if(!el)return;el.textContent=fmtT(s);tmrs[id]=setInterval(()=>{s++;el.textContent=fmtT(s)},1000)}
+function stopT(){Object.values(tmrs).forEach(clearInterval);tmrs={}}
+function go(){initAudio();nxt()}
+function show(i){if(i<0||i>=SC.length)return;ci=i;stopT();document.querySelectorAll('.scene').forEach(s=>s.classList.remove('active'));document.getElementById(SC[i]).classList.add('active');document.getElementById('scnt').textContent=i===0?'':String(i).padStart(2,'0')+' / '+String(SC.length-1).padStart(2,'0');document.getElementById('pbar').style.width=i===0?'0%':((i/(SC.length-1))*100)+'%';if(i>0){anim(i);speak(VO[SC[i]]);typeVO(VO[SC[i]],'vo'+i)}clearTimeout(atm);if(!paused&&i>0&&i<SC.length-1)atm=setTimeout(nxt,DUR[i]||13000)}
+function nxt(){show(ci+1)}function prev(){show(Math.max(0,ci-1))}
+function pp(){paused=!paused;document.getElementById('ppb').textContent=paused?'>':'||';if(!paused&&ci>0&&ci<SC.length-1)atm=setTimeout(nxt,5000);else clearTimeout(atm)}
+function anim(idx){
+const el=document.getElementById(SC[idx]);
+el.querySelectorAll('.chi,.msg,.ins,.bp,.arow,.comp-inline,.sgc,.supb,.arch-node,.arch-arrow').forEach(x=>{x.classList.remove('show','active','brain');setTimeout(()=>x.classList.add('show'),+(x.dataset.d||500))});
+el.querySelectorAll('[data-count]').forEach(e=>{const t=+e.dataset.count;let c=0;const s=Math.max(1,Math.floor(t/30));const iv=setInterval(()=>{c=Math.min(c+s,t);e.textContent=c;if(c>=t)clearInterval(iv)},50)});
+// Scene-specific
+if(idx===2){mkWave('s2wv',28,'var(--green)');startT('s2tm',0)}
+if(idx===3){
+// Architecture: light up nodes sequentially and make PE the brain
+setTimeout(()=>{const n=document.getElementById('an1');if(n)n.classList.add('active')},500);
+setTimeout(()=>{const a=document.getElementById('aa1');if(a)a.classList.add('active')},700);
+setTimeout(()=>{const n=document.getElementById('an2');if(n)n.classList.add('active')},900);
+setTimeout(()=>{const a=document.getElementById('aa2');if(a)a.classList.add('active')},1100);
+setTimeout(()=>{const n=document.getElementById('an3');if(n)n.classList.add('active')},1300);
+setTimeout(()=>{const a=document.getElementById('aa3');if(a)a.classList.add('active')},1500);
+setTimeout(()=>{const n=document.getElementById('an4');if(n){n.classList.add('brain');n.style.transform='scale(1.02)'}},1800);
+setTimeout(()=>{const a=document.getElementById('aa4');if(a)a.classList.add('active')},2100);
+setTimeout(()=>{const n=document.getElementById('an5');if(n)n.classList.add('active')},2300);
+setTimeout(()=>{const a=document.getElementById('aa5');if(a)a.classList.add('active')},2500);
+setTimeout(()=>{const n=document.getElementById('an6');if(n)n.classList.add('active')},2700);
+// Differentiator card
+setTimeout(()=>{const d=document.getElementById('s3diff');if(d){d.style.opacity='1'}},6500);
+}
+if(idx===4){startT('s4tm',134);setTimeout(()=>{const b=document.getElementById('s4btn');if(b){b.textContent='Approved';b.style.boxShadow='0 0 16px rgba(45,212,168,0.3)'}},6000)}
+if(idx===6){mkWave('s6wv',36,'var(--purple)');startT('s6tm',0)}
+if(idx===7){
+setTimeout(()=>{const s=document.getElementById('s7sig');if(s){s.style.opacity='1';s.style.transition='opacity .5s'}},3500);
+const qt="I lost my job. I cannot make this payment.";const qel=document.getElementById('s7q');if(qel){qel.textContent='';let qi=0;setTimeout(()=>{const ti=setInterval(()=>{if(qi<qt.length){qel.textContent+=qt[qi];qi++}else clearInterval(ti)},55)},2500)}
+setTimeout(()=>{const r=document.getElementById('s7react');if(r)r.style.opacity='1'},5500);
+startT('s7tm',72);
+}
+}
+function mkWave(id,n,c){const el=document.getElementById(id);if(!el)return;el.innerHTML='';for(let i=0;i<n;i++){const b=document.createElement('div');b.style.cssText=`width:4px;border-radius:2px;background:${c};height:6px;animation:wbounce 1.2s ease-in-out infinite;animation-delay:${i*.04}s`;el.appendChild(b)}}
+function typeVO(t,id){const el=document.getElementById(id);if(!el)return;el.innerHTML='';let i=0;const iv=setInterval(()=>{if(i<t.length){el.innerHTML=t.substring(0,i+1)+'<span class="cur"></span>';i++}else{el.innerHTML=t;clearInterval(iv)}},25)}
+function speak(t){if(!('speechSynthesis' in window))return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.rate=.85;u.pitch=.95;u.volume=.8;const vs=speechSynthesis.getVoices();const pv=vs.find(v=>v.name.includes('Google')&&v.lang.startsWith('en'))||vs.find(v=>v.lang.startsWith('en'));if(pv)u.voice=pv;speechSynthesis.speak(u)}
+function initAudio(){if(actx)return;actx=new(window.AudioContext||window.webkitAudioContext)();const o1=actx.createOscillator(),g1=actx.createGain();o1.type='sine';o1.frequency.value=55;g1.gain.value=.04;o1.connect(g1).connect(actx.destination);o1.start();const o2=actx.createOscillator(),g2=actx.createGain(),f=actx.createBiquadFilter();o2.type='sine';o2.frequency.value=220;g2.gain.value=.012;f.type='lowpass';f.frequency.value=350;o2.connect(f).connect(g2).connect(actx.destination);o2.start();const o3=actx.createOscillator(),g3=actx.createGain();o3.type='sine';o3.frequency.value=82.5;g3.gain.value=.02;o3.connect(g3).connect(actx.destination);o3.start()}
+let muted=false;function mute(){if(!actx)return;muted=!muted;if(muted){actx.suspend();speechSynthesis.cancel()}else actx.resume()}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' '){e.preventDefault();nxt()}if(e.key==='ArrowLeft'){e.preventDefault();prev()}if(e.key==='p')pp();if(e.key==='m')mute()});
+if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>speechSynthesis.getVoices()}
+</script>
+</body>
+</html>

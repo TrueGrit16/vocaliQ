@@ -1,0 +1,826 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Graph Compiler and Management API
+  version: 1.0.0
+  description: |
+    Manages conversation graph lifecycle: authoring, validation, compilation,
+    publishing, versioning, and rollback. The Graph Compiler statically
+    analyzes graph definitions against safety rules, regulatory constraints,
+    and structural requirements before any graph reaches production.
+
+    Compilation is deterministic: same input + same rules = same output.
+    There is no override mechanism for blocker-severity findings.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. Compilation endpoints are rate-limited
+    per-tenant (max 30/min) to prevent resource exhaustion. CRUD endpoints
+    follow standard tenant-level limits.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/graphs/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Graphs
+    description: Graph CRUD and versioning
+  - name: Compiler
+    description: Graph validation and compilation
+  - name: Deployment
+    description: Publishing, rollback, and version management
+  - name: Rules
+    description: Compiler rules catalog
+
+paths:
+  /graphs:
+    post:
+      operationId: createGraph
+      summary: Create a new graph definition
+      tags: [Graphs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphRequest'
+      responses:
+        '201':
+          description: Graph created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graph'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      operationId: listGraphs
+      summary: List graphs for a tenant
+      tags: [Graphs]
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Graph list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphListResponse'
+
+  /graphs/{graph_id}:
+    get:
+      operationId: getGraph
+      summary: Get graph definition and metadata
+      tags: [Graphs]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+      responses:
+        '200':
+          description: Graph details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Graph'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /graphs/{graph_id}/versions:
+    post:
+      operationId: createGraphVersion
+      summary: Create a new version of a graph
+      tags: [Graphs]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGraphVersionRequest'
+      responses:
+        '201':
+          description: Version created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphVersion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      operationId: listGraphVersions
+      summary: List all versions of a graph
+      tags: [Graphs]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+      responses:
+        '200':
+          description: Version list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphVersionList'
+
+  /graphs/{graph_id}/versions/{version_id}/validate:
+    post:
+      operationId: validateGraph
+      summary: Validate a graph without full compilation
+      description: |
+        Faster than full compilation. Useful during interactive editing.
+        Supports scoped validation (structural only, auth only, or full).
+      tags: [Compiler]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+
+  /compile:
+    post:
+      operationId: compileGraph
+      summary: Compile a graph definition
+      description: |
+        Full compilation including all safety rules, regulatory constraints,
+        and structural checks. Produces a compiled graph artifact if all
+        blocker-severity rules pass. Idempotent: same input produces same output.
+
+        Design note: /compile is a top-level endpoint rather than nested under
+        /graphs/{graph_id}/versions/{version_id}/compile because compilation
+        can accept arbitrary graph definitions (including unsaved drafts),
+        not only persisted versions. This matches the component spec
+        (graph_compiler.md Section 6.1).
+      tags: [Compiler]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompileRequest'
+      responses:
+        '200':
+          description: Compilation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompilationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /diff:
+    post:
+      operationId: diffGraphs
+      summary: Compare two graph versions
+      description: Identifies added, removed, and changed nodes and transitions between two graph versions. Flags new risks introduced.
+      tags: [Compiler]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiffRequest'
+      responses:
+        '200':
+          description: Diff result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiffResult'
+
+  /graphs/{graph_id}/versions/{version_id}/submit-approval:
+    post:
+      operationId: submitForApproval
+      summary: Submit a compiled graph for approval
+      description: Requires compilation_result = pass. Initiates the approval workflow.
+      tags: [Deployment]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalSubmission'
+      responses:
+        '200':
+          description: Submitted for approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalStatus'
+        '422':
+          description: Graph not compiled or compilation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /graphs/{graph_id}/versions/{version_id}/publish:
+    post:
+      operationId: publishGraph
+      summary: Publish a compiled and approved graph
+      description: |
+        Makes the graph version available to the Conversation Runtime.
+        Requires compilation_result = pass and all required approvals obtained.
+      tags: [Deployment]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRequest'
+      responses:
+        '200':
+          description: Published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishResponse'
+        '422':
+          description: Prerequisites not met (compilation failed or approvals missing)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /graphs/{graph_id}/versions/{version_id}/rollback:
+    post:
+      operationId: rollbackGraph
+      summary: Rollback to a previous graph version
+      tags: [Deployment]
+      parameters:
+        - $ref: '#/components/parameters/GraphId'
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackRequest'
+      responses:
+        '200':
+          description: Rolled back
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollbackResponse'
+
+  /rules:
+    get:
+      operationId: listRules
+      summary: List all active compiler rules
+      tags: [Rules]
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [authentication, data_access, pci, complaint, collections, fraud, audit, tool_safety, llm_constraints, prohibited, structural, quality]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [blocker, warning, info]
+      responses:
+        '200':
+          description: Rules catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RulesCatalog'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    GraphId:
+      name: graph_id
+      in: path
+      required: true
+      schema:
+        type: string
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        default: 20
+        maximum: 100
+    PageToken:
+      name: page_token
+      in: query
+      schema:
+        type: string
+
+  schemas:
+    CreateGraphRequest:
+      type: object
+      required: [tenant_id, name, workflow_type]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        workflow_type:
+          type: string
+          description: "e.g., lost_card, balance_inquiry, complaint"
+        tags:
+          type: array
+          items:
+            type: string
+
+    Graph:
+      type: object
+      properties:
+        graph_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        workflow_type:
+          type: string
+        active_version:
+          type: string
+          nullable: true
+        versions_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    GraphListResponse:
+      type: object
+      properties:
+        graphs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Graph'
+        next_page_token:
+          type: string
+          nullable: true
+
+    CreateGraphVersionRequest:
+      type: object
+      required: [definition]
+      properties:
+        definition:
+          $ref: '#/components/schemas/GraphDefinition'
+        change_notes:
+          type: string
+
+    GraphDefinition:
+      type: object
+      description: |
+        The full graph definition in VocalIQ's graph DSL. Contains nodes,
+        transitions, slot definitions, and metadata. See graph_compiler.md
+        for the full DSL specification.
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        start_node:
+          type: string
+        metadata:
+          type: object
+          properties:
+            jurisdiction:
+              type: string
+            language:
+              type: string
+            workflow_category:
+              type: string
+
+    GraphNode:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum:
+            - SpeakNode
+            - CollectNode
+            - IntentNode
+            - AuthenticateNode
+            - PolicyNode
+            - RiskNode
+            - ToolNode
+            - RAGNode
+            - DisclosureNode
+            - ConfirmNode
+            - HumanApprovalNode
+            - TransferNode
+            - CaseNode
+            - WaitNode
+            - EndNode
+            - FallbackNode
+        autonomy_level:
+          type: string
+          enum: [A0, A1, A2, A3, A4, A5]
+        required_authentication:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        llm_assisted:
+          type: boolean
+        next:
+          description: Next node ID (string) or condition-to-node routing map (object)
+          oneOf:
+            - type: string
+              description: Direct transition to a single next node
+            - type: object
+              additionalProperties:
+                type: string
+              description: Map of condition value to target node ID
+        fallback_node:
+          type: string
+        timeout_ms:
+          type: integer
+        max_retries:
+          type: integer
+
+    GraphVersion:
+      type: object
+      properties:
+        version_id:
+          type: string
+        graph_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, compiled, approved, published, rolled_back]
+        definition:
+          $ref: '#/components/schemas/GraphDefinition'
+        compilation_id:
+          type: string
+          nullable: true
+        node_count:
+          type: integer
+        transition_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        change_notes:
+          type: string
+
+    GraphVersionList:
+      type: object
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphVersion'
+
+    ValidateRequest:
+      type: object
+      properties:
+        validation_scope:
+          type: string
+          enum: [structural, auth, full]
+          default: full
+
+    ValidationResult:
+      type: object
+      properties:
+        result:
+          type: string
+          enum: [pass, fail]
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+
+    CompileRequest:
+      type: object
+      required: [graph_id, version_id, tenant_id]
+      properties:
+        graph_id:
+          type: string
+        version_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        target_environment:
+          type: string
+          enum: [sandbox, staging, production]
+          default: production
+
+    CompilationResult:
+      type: object
+      properties:
+        compilation_id:
+          type: string
+        graph_id:
+          type: string
+        graph_version:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        result:
+          type: string
+          enum: [pass, fail]
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+        info:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+        compiled_at:
+          type: string
+          format: date-time
+        compiled_by:
+          type: string
+        compiler_version:
+          type: string
+        rules_version:
+          type: string
+        node_count:
+          type: integer
+        transition_count:
+          type: integer
+        complexity_score:
+          type: integer
+
+    CompilerFinding:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [blocker, warning, info]
+        rule_id:
+          type: string
+        node_id:
+          type: string
+          nullable: true
+        message:
+          type: string
+        required_fix:
+          type: string
+          nullable: true
+        category:
+          type: string
+
+    DiffRequest:
+      type: object
+      required: [graph_v1, graph_v2]
+      properties:
+        graph_v1:
+          type: object
+          properties:
+            graph_id:
+              type: string
+            version_id:
+              type: string
+        graph_v2:
+          type: object
+          properties:
+            graph_id:
+              type: string
+            version_id:
+              type: string
+
+    DiffResult:
+      type: object
+      properties:
+        added_nodes:
+          type: array
+          items:
+            type: string
+        removed_nodes:
+          type: array
+          items:
+            type: string
+        changed_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeChange'
+        changed_transitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransitionChange'
+        new_risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerFinding'
+
+    NodeChange:
+      type: object
+      properties:
+        node_id:
+          type: string
+        field:
+          type: string
+        old_value:
+          type: string
+        new_value:
+          type: string
+
+    TransitionChange:
+      type: object
+      properties:
+        from_node:
+          type: string
+        to_node_old:
+          type: string
+        to_node_new:
+          type: string
+        condition:
+          type: string
+
+    ApprovalSubmission:
+      type: object
+      required: [submitted_by]
+      properties:
+        submitted_by:
+          type: string
+        notes:
+          type: string
+
+    ApprovalStatus:
+      type: object
+      properties:
+        approval_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        required_approvers:
+          type: array
+          items:
+            type: string
+        approved_by:
+          type: array
+          items:
+            type: string
+
+    PublishRequest:
+      type: object
+      required: [published_by, deployment_target]
+      properties:
+        published_by:
+          type: string
+        deployment_target:
+          type: string
+          enum: [sandbox, staging, production]
+
+    PublishResponse:
+      type: object
+      properties:
+        published_version:
+          type: string
+        effective_at:
+          type: string
+          format: date-time
+        deployment_target:
+          type: string
+
+    RollbackRequest:
+      type: object
+      required: [rolled_back_by, reason]
+      properties:
+        rolled_back_by:
+          type: string
+        reason:
+          type: string
+
+    RollbackResponse:
+      type: object
+      properties:
+        rollback_result:
+          type: string
+          enum: [success, failed]
+        active_sessions_affected:
+          type: integer
+          description: Active sessions that will continue on the old version
+
+    RulesCatalog:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilerRule'
+
+    CompilerRule:
+      type: object
+      properties:
+        rule_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        severity:
+          type: string
+          enum: [blocker, warning, info]
+        node_types_affected:
+          type: array
+          items:
+            type: string
+        remediation_guidance:
+          type: string
+        regulatory_references:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        tenant_overridable:
+          type: boolean
+          description: Always false for safety-critical rules
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

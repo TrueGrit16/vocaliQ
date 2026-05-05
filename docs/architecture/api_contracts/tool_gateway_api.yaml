@@ -1,0 +1,732 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Tool Execution Gateway API
+  version: 1.0.0
+  description: |
+    Last enforcement layer before bank systems. The Tool Gateway executes
+    validated, policy-approved actions against bank connectors. It manages
+    tool registration, connector lifecycle, execution logging, and provides
+    sandbox/dry-run capabilities.
+
+    Every execution is scoped by a tool manifest that defines allowed
+    parameters, forbidden inputs, rate limits, idempotency requirements,
+    and risk classification.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. Tool execution is rate-limited both at the
+    gateway level (per-tenant) and per-tool (defined in each tool's manifest
+    via max_per_session, max_per_minute, max_per_hour). The tool manifest
+    rate limits are the binding constraint.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/tools/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Execution
+    description: Tool execution (hot path)
+  - name: Registry
+    description: Tool and connector management
+  - name: Connectors
+    description: Bank system connector lifecycle
+
+paths:
+  /execute:
+    post:
+      operationId: executeTool
+      summary: Execute a tool call against a bank system
+      description: |
+        Validates the request against the tool manifest, checks policy
+        approval, enforces rate limits, applies idempotency, and executes
+        the action through the appropriate bank connector.
+
+        Requires a valid policy_decision_id from a prior Policy Engine
+        evaluation (except for A0 read-only tools).
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolExecutionRequest'
+      responses:
+        '200':
+          description: Tool executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Policy approval missing or denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tool not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency conflict (duplicate execution)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResult'
+        '422':
+          description: Manifest validation failed (forbidden input, missing required field)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestValidationError'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Bank connector error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResult'
+        '504':
+          description: Bank connector timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResult'
+
+  /executions/{execution_id}:
+    get:
+      operationId: getToolExecution
+      summary: Get execution status and result
+      description: Used for polling async tool executions or retrieving historical execution data for audit.
+      tags: [Execution]
+      parameters:
+        - name: execution_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Execution details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tools:
+    get:
+      operationId: listTools
+      summary: List registered tools
+      tags: [Registry]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: category
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tool list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolList'
+    post:
+      operationId: registerTool
+      summary: Register a new tool
+      tags: [Registry]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterToolRequest'
+      responses:
+        '201':
+          description: Tool registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRegistryEntry'
+
+  /tools/{tool_id}:
+    get:
+      operationId: getTool
+      summary: Get tool details and manifest
+      tags: [Registry]
+      parameters:
+        - $ref: '#/components/parameters/ToolId'
+      responses:
+        '200':
+          description: Tool details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRegistryEntry'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateTool
+      summary: Update tool manifest
+      tags: [Registry]
+      parameters:
+        - $ref: '#/components/parameters/ToolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateToolRequest'
+      responses:
+        '200':
+          description: Tool updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolRegistryEntry'
+
+  /tools/{tool_id}/validate:
+    post:
+      operationId: validateToolManifest
+      summary: Validate a tool manifest without registering
+      description: Checks manifest completeness, forbidden input coverage, and connector availability.
+      tags: [Registry]
+      parameters:
+        - $ref: '#/components/parameters/ToolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolManifest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestValidationResult'
+
+  /connectors:
+    get:
+      operationId: listConnectors
+      summary: List bank system connectors
+      tags: [Connectors]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, error]
+      responses:
+        '200':
+          description: Connector list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorList'
+    post:
+      operationId: createConnector
+      summary: Register a new bank system connector
+      tags: [Connectors]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectorRequest'
+      responses:
+        '201':
+          description: Connector created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connector'
+
+  /connectors/{connector_id}/health:
+    get:
+      operationId: getConnectorHealth
+      summary: Get connector health status
+      tags: [Connectors]
+      parameters:
+        - name: connector_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorHealth'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ToolId:
+      name: tool_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    ToolExecutionRequest:
+      type: object
+      required: [tool_id, session_id, tenant_id, parameters, idempotency_key]
+      properties:
+        tool_id:
+          type: string
+        session_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        call_id:
+          type: string
+          format: uuid
+        policy_decision_id:
+          type: string
+          format: uuid
+          description: Required for A2+ tools. References the Policy Engine's approval.
+        parameters:
+          type: object
+          description: Tool-specific parameters validated against the manifest
+        idempotency_key:
+          type: string
+          description: Client-generated unique key for deduplication
+        dry_run:
+          type: boolean
+          default: false
+          description: Validate and log but do not execute
+        sandbox:
+          type: boolean
+          default: false
+          description: Execute against sandbox connector
+
+    ToolExecutionResult:
+      type: object
+      properties:
+        execution_id:
+          type: string
+          format: uuid
+        tool_id:
+          type: string
+        status:
+          type: string
+          enum: [success, failure, denied, timeout, dry_run, sandbox]
+        result:
+          type: object
+          description: Tool-specific result data
+        error:
+          $ref: '#/components/schemas/ToolError'
+          nullable: true
+        execution_duration_ms:
+          type: integer
+        idempotency_key:
+          type: string
+        executed_at:
+          type: string
+          format: date-time
+        connector_id:
+          type: string
+        audit_event_id:
+          type: string
+          description: Reference to the audit event for this execution
+
+    ToolError:
+      type: object
+      properties:
+        error_type:
+          type: string
+          enum:
+            - connector_error
+            - timeout
+            - manifest_violation
+            - policy_denied
+            - rate_limited
+            - connector_unavailable
+            - invalid_response
+        error_code:
+          type: string
+        message:
+          type: string
+        retryable:
+          type: boolean
+        bank_error_code:
+          type: string
+          nullable: true
+          description: Error code from the bank system, if available
+
+    ManifestValidationError:
+      type: object
+      properties:
+        error_code:
+          type: string
+          enum: [FORBIDDEN_INPUT, MISSING_REQUIRED, TYPE_MISMATCH, MANIFEST_VIOLATION]
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              rule:
+                type: string
+              message:
+                type: string
+
+    RegisterToolRequest:
+      type: object
+      required: [tenant_id, manifest]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        manifest:
+          $ref: '#/components/schemas/ToolManifest'
+
+    UpdateToolRequest:
+      type: object
+      required: [manifest]
+      properties:
+        manifest:
+          $ref: '#/components/schemas/ToolManifest'
+        change_notes:
+          type: string
+
+    ToolManifest:
+      type: object
+      description: |
+        YAML-based tool definition that specifies allowed parameters,
+        forbidden inputs, authentication requirements, rate limits,
+        and risk classification. This is the contract between VocalIQ
+        and the bank system.
+      required: [name, description, connector_id, risk_level, required_authentication, parameters]
+      properties:
+        name:
+          type: string
+          description: "Unique tool identifier, e.g., card.block, balance.read"
+        description:
+          type: string
+        connector_id:
+          type: string
+        risk_level:
+          type: string
+          enum: [low, medium, high, critical]
+        allowed_autonomy_levels:
+          type: array
+          items:
+            type: string
+            enum: [A0, A1, A2, A3, A4, A5]
+        required_authentication:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        requires_confirmation:
+          type: boolean
+          default: false
+        requires_human_approval:
+          type: boolean
+          default: false
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolParameter'
+        forbidden_inputs:
+          type: array
+          items:
+            type: string
+          description: "Data classes that must not appear in parameters, e.g., pan, cvv, pin, password"
+        idempotency:
+          type: string
+          enum: [required, optional, not_applicable]
+        rate_limit:
+          $ref: '#/components/schemas/RateLimit'
+        timeout_ms:
+          type: integer
+          default: 5000
+        retry_policy:
+          $ref: '#/components/schemas/RetryPolicy'
+
+    ToolParameter:
+      type: object
+      required: [name, type, required]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [string, integer, number, boolean, object, array]
+        required:
+          type: boolean
+        description:
+          type: string
+        validation:
+          type: object
+          properties:
+            pattern:
+              type: string
+            min_length:
+              type: integer
+            max_length:
+              type: integer
+            minimum:
+              type: number
+            maximum:
+              type: number
+            enum:
+              type: array
+              items:
+                type: string
+
+    RateLimit:
+      type: object
+      properties:
+        max_per_session:
+          type: integer
+        max_per_minute:
+          type: integer
+        max_per_hour:
+          type: integer
+
+    RetryPolicy:
+      type: object
+      properties:
+        max_retries:
+          type: integer
+          default: 1
+        retry_delay_ms:
+          type: integer
+          default: 1000
+        retryable_errors:
+          type: array
+          items:
+            type: string
+
+    ToolRegistryEntry:
+      type: object
+      properties:
+        tool_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        manifest:
+          $ref: '#/components/schemas/ToolManifest'
+        status:
+          type: string
+          enum: [active, inactive, deprecated]
+        version:
+          type: string
+        connector_status:
+          type: string
+          enum: [healthy, degraded, down]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ToolList:
+      type: object
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolRegistryEntry'
+
+    ManifestValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        warnings:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    CreateConnectorRequest:
+      type: object
+      required: [tenant_id, name, type, config]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [rest_api, soap, grpc, database, message_queue]
+        config:
+          $ref: '#/components/schemas/ConnectorConfig'
+
+    ConnectorConfig:
+      type: object
+      properties:
+        endpoint_url:
+          type: string
+          format: uri
+        auth_type:
+          type: string
+          enum: [mtls, oauth2, api_key, certificate]
+        credential_ref:
+          type: string
+          description: Reference to secret store (never inline credentials)
+        timeout_ms:
+          type: integer
+          default: 5000
+        max_concurrent:
+          type: integer
+          default: 50
+        circuit_breaker:
+          type: object
+          properties:
+            failure_threshold:
+              type: integer
+              default: 5
+            recovery_timeout_ms:
+              type: integer
+              default: 30000
+
+    Connector:
+      type: object
+      properties:
+        connector_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, error]
+        health:
+          $ref: '#/components/schemas/ConnectorHealth'
+        created_at:
+          type: string
+          format: date-time
+
+    ConnectorList:
+      type: object
+      properties:
+        connectors:
+          type: array
+          items:
+            $ref: '#/components/schemas/Connector'
+
+    ConnectorHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, down]
+        latency_p50_ms:
+          type: integer
+        latency_p99_ms:
+          type: integer
+        error_rate:
+          type: number
+          format: float
+        last_success_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error_at:
+          type: string
+          format: date-time
+          nullable: true
+        circuit_breaker_state:
+          type: string
+          enum: [closed, open, half_open]
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

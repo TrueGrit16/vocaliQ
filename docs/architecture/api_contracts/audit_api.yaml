@@ -1,0 +1,1038 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Audit and Event Ledger API
+  version: 1.0.0
+  description: |
+    Append-only, tamper-evident event ledger for all VocalIQ platform activity.
+    The Audit API supports event ingestion, querying, call timeline
+    reconstruction, data export (including DSAR/GDPR), chain verification,
+    retention management, and legal hold.
+
+    Events are cryptographically chained (hash_prev/hash_current) for
+    tamper evidence. The ledger is immutable: events cannot be modified
+    or deleted outside of retention policy expiry.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. Ingestion endpoints support high throughput
+    (batch ingestion preferred). Query and export endpoints are rate-limited
+    per-tenant to prevent abuse. Integrity verification is computationally
+    expensive and limited to 10 requests per hour per tenant.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/audit/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Ingestion
+    description: Event ingestion (internal, sidecar pattern)
+  - name: Query
+    description: Event querying and call timeline
+  - name: Export
+    description: Data export and DSAR
+  - name: Integrity
+    description: Chain verification and tamper detection
+  - name: Retention
+    description: Retention policies and legal hold
+  - name: Replay
+    description: Call replay with synchronized events
+
+paths:
+  /events:
+    post:
+      operationId: ingestEvent
+      summary: Ingest a single audit event
+      description: |
+        Called by the audit sidecar attached to each component. The ledger
+        computes hash_current from the event payload and hash_prev,
+        appending the event to the chain.
+      tags: [Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestEventRequest'
+      responses:
+        '201':
+          description: Event ingested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestEventResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /events/batch:
+    post:
+      operationId: ingestEventBatch
+      summary: Ingest a batch of audit events
+      description: Accepts up to 100 events in a single call. Events are ordered and chained sequentially.
+      tags: [Ingestion]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestBatchRequest'
+      responses:
+        '201':
+          description: Batch ingested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestBatchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '207':
+          description: Partial success (some events failed validation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestBatchResponse'
+
+  /events/query:
+    post:
+      operationId: queryEvents
+      summary: Query audit events
+      description: |
+        Flexible query interface supporting filtering by tenant, call,
+        session, event type, actor, time range, and component. Results
+        are paginated and sorted by timestamp.
+      tags: [Query]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventQuery'
+      responses:
+        '200':
+          description: Query results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventQueryResponse'
+
+  /calls/{call_id}/timeline:
+    get:
+      operationId: getCallTimeline
+      summary: Get complete call timeline
+      description: |
+        Returns all audit events for a call in chronological order,
+        forming a complete timeline from call start to end. Includes
+        events from all components (Media Gateway, Speech Layer,
+        Conversation Runtime, Policy Engine, Tool Gateway, etc.).
+      tags: [Query]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+        - name: component
+          in: query
+          description: Filter to events from a specific component
+          schema:
+            type: string
+        - name: event_type
+          in: query
+          description: Filter to specific event types
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Call timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallTimeline'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /calls/{call_id}/events:
+    get:
+      operationId: getCallEvents
+      summary: Get raw events for a call
+      description: Returns raw audit events without timeline assembly. Supports pagination.
+      tags: [Query]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Call events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventQueryResponse'
+
+  /calls/{call_id}/replay:
+    get:
+      operationId: getCallReplay
+      summary: Get call replay package
+      description: |
+        Returns everything needed for call replay: recording reference,
+        transcript, and synchronized event timeline. Used by the Human
+        Control Center for post-call review.
+      tags: [Replay]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      responses:
+        '200':
+          description: Replay package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayPackage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /export:
+    post:
+      operationId: exportEvents
+      summary: Export audit events
+      description: |
+        Creates an export job for audit events matching the specified
+        criteria. Supports CSV and JSON formats. Used for compliance
+        reporting and bank audit requests.
+      tags: [Export]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequest'
+      responses:
+        '202':
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+
+  /export/{export_id}:
+    get:
+      operationId: getExportStatus
+      summary: Get export job status
+      tags: [Export]
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Export status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+
+  /export/data-subject:
+    post:
+      operationId: dataSubjectExport
+      summary: DSAR/GDPR data subject export
+      description: |
+        Exports all audit events and associated data for a specific
+        data subject (identified by caller hash, customer reference,
+        or phone number hash). Used for GDPR/PDPA data subject access
+        requests.
+      tags: [Export]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DataSubjectExportRequest'
+      responses:
+        '202':
+          description: DSAR export job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+
+  /integrity/verify:
+    post:
+      operationId: verifyChain
+      summary: Verify hash chain integrity
+      description: |
+        Validates the cryptographic hash chain for a specified scope
+        (tenant, call, or time range). Detects any tampering, missing
+        events, or chain breaks.
+      tags: [Integrity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyChainRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyChainResult'
+
+  /retention/policies:
+    get:
+      operationId: listRetentionPolicies
+      summary: List retention policies
+      tags: [Retention]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Retention policies
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicyList'
+    post:
+      operationId: createRetentionPolicy
+      summary: Create a retention policy
+      tags: [Retention]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRetentionPolicyRequest'
+      responses:
+        '201':
+          description: Policy created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPolicy'
+
+  /legal-hold:
+    post:
+      operationId: createLegalHold
+      summary: Place events under legal hold
+      description: |
+        Prevents deletion of events matching the hold criteria,
+        regardless of retention policy. Used for litigation, regulatory
+        investigation, or complaint resolution.
+      tags: [Retention]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLegalHoldRequest'
+      responses:
+        '201':
+          description: Legal hold created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+    get:
+      operationId: listLegalHolds
+      summary: List active legal holds
+      tags: [Retention]
+      responses:
+        '200':
+          description: Legal holds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHoldList'
+
+  /legal-hold/{hold_id}/release:
+    post:
+      operationId: releaseLegalHold
+      summary: Release a legal hold
+      tags: [Retention]
+      parameters:
+        - name: hold_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseLegalHoldRequest'
+      responses:
+        '200':
+          description: Hold released
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegalHold'
+
+  /redaction-request:
+    post:
+      operationId: createRedactionRequest
+      summary: Request redaction of sensitive data
+      description: |
+        Requests redaction of PII/sensitive data from audit events.
+        Redaction replaces sensitive payload content with redaction
+        markers while preserving event structure and hash chain integrity.
+        Requires compliance officer approval.
+      tags: [Retention]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedactionRequest'
+      responses:
+        '202':
+          description: Redaction request submitted for approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedactionRequestResponse'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    CallId:
+      name: call_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        default: 50
+        maximum: 500
+    PageToken:
+      name: page_token
+      in: query
+      schema:
+        type: string
+
+  schemas:
+    IngestEventRequest:
+      type: object
+      required: [tenant_id, event_type, actor_type, component]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        call_session_id:
+          type: string
+          format: uuid
+          nullable: true
+        event_type:
+          type: string
+          description: "Namespaced event type, e.g., session.started, policy.evaluated, tool.executed"
+        actor_type:
+          type: string
+          enum: [system, ai_agent, human_supervisor, human_agent, caller, admin]
+        actor_id:
+          type: string
+          nullable: true
+        component:
+          type: string
+          description: "Source component, e.g., conversation_runtime, policy_engine, tool_gateway"
+        graph_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        policy_version_id:
+          type: string
+          nullable: true
+        model_version_id:
+          type: string
+          nullable: true
+        prompt_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        tool_call_id:
+          type: string
+          format: uuid
+          nullable: true
+        payload_redacted:
+          type: object
+          description: Event payload with PII/PCI already redacted
+        sensitive_payload_ref:
+          type: string
+          format: uuid
+          nullable: true
+          description: Reference to encrypted sensitive payload in secure storage
+        data_classification:
+          type: string
+          enum: [PUBLIC, INTERNAL, CONFIDENTIAL_CUSTOMER, SENSITIVE_CUSTOMER, PCI_CARDHOLDER, PCI_SENSITIVE_AUTHENTICATION, BANK_SECRET, MODEL_GOVERNANCE, SECURITY_SECRET, LEGAL_PRIVILEGED]
+          default: INTERNAL
+
+    IngestEventResponse:
+      type: object
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        hash_current:
+          type: string
+          description: SHA-256 hash of this event
+        ingested_at:
+          type: string
+          format: date-time
+
+    IngestBatchRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/IngestEventRequest'
+          maxItems: 100
+
+    IngestBatchResponse:
+      type: object
+      properties:
+        ingested_count:
+          type: integer
+        failed_count:
+          type: integer
+        event_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        failures:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              error:
+                type: string
+
+    AuditEvent:
+      type: object
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        call_session_id:
+          type: string
+          format: uuid
+          nullable: true
+        event_type:
+          type: string
+        actor_type:
+          type: string
+        actor_id:
+          type: string
+          nullable: true
+        component:
+          type: string
+        graph_version_id:
+          type: string
+          format: uuid
+          nullable: true
+        policy_version_id:
+          type: string
+          nullable: true
+        model_version_id:
+          type: string
+          nullable: true
+        payload_redacted:
+          type: object
+        sensitive_payload_ref:
+          type: string
+          format: uuid
+          nullable: true
+        hash_prev:
+          type: string
+        hash_current:
+          type: string
+        data_classification:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    EventQuery:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        call_session_id:
+          type: string
+          format: uuid
+        event_types:
+          type: array
+          items:
+            type: string
+        actor_types:
+          type: array
+          items:
+            type: string
+        components:
+          type: array
+          items:
+            type: string
+        from_timestamp:
+          type: string
+          format: date-time
+        to_timestamp:
+          type: string
+          format: date-time
+        page_size:
+          type: integer
+          default: 50
+          maximum: 500
+        page_token:
+          type: string
+
+    EventQueryResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        total_count:
+          type: integer
+        next_page_token:
+          type: string
+          nullable: true
+
+    CallTimeline:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        call_start:
+          type: string
+          format: date-time
+        call_end:
+          type: string
+          format: date-time
+          nullable: true
+        duration_seconds:
+          type: integer
+        event_count:
+          type: integer
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+
+    TimelineEntry:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+        component:
+          type: string
+        summary:
+          type: string
+        details:
+          type: object
+        event_id:
+          type: string
+          format: uuid
+
+    ReplayPackage:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        recording_artifact_ref:
+          type: string
+          nullable: true
+        transcript_segments:
+          type: array
+          items:
+            type: object
+            properties:
+              speaker:
+                type: string
+              text:
+                type: string
+              start_ms:
+                type: integer
+              end_ms:
+                type: integer
+        events_timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+
+    ExportRequest:
+      type: object
+      required: [tenant_id, from_date, to_date, format]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        from_date:
+          type: string
+          format: date
+        to_date:
+          type: string
+          format: date
+        event_types:
+          type: array
+          items:
+            type: string
+        format:
+          type: string
+          enum: [csv, json, parquet]
+        include_sensitive_refs:
+          type: boolean
+          default: false
+          description: Whether to resolve sensitive payload references
+
+    ExportJob:
+      type: object
+      properties:
+        export_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        download_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Signed URL, available when status is completed
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        event_count:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    DataSubjectExportRequest:
+      type: object
+      required: [subject_identifier_type, subject_identifier_hash, requested_by]
+      properties:
+        subject_identifier_type:
+          type: string
+          enum: [caller_hash, customer_ref, phone_hash]
+        subject_identifier_hash:
+          type: string
+          description: Hashed identifier (never raw PII)
+        requested_by:
+          type: string
+        dsar_reference:
+          type: string
+          description: External DSAR ticket reference
+
+    VerifyChainRequest:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum: [tenant, call, time_range]
+        tenant_id:
+          type: string
+          format: uuid
+        call_session_id:
+          type: string
+          format: uuid
+          nullable: true
+        from_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        to_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+
+    VerifyChainResult:
+      type: object
+      properties:
+        verified:
+          type: boolean
+        events_checked:
+          type: integer
+        chain_breaks:
+          type: array
+          items:
+            type: object
+            properties:
+              event_id:
+                type: string
+                format: uuid
+              expected_hash:
+                type: string
+              actual_hash:
+                type: string
+              position:
+                type: integer
+        missing_events:
+          type: integer
+        verified_at:
+          type: string
+          format: date-time
+
+    RetentionPolicy:
+      type: object
+      properties:
+        policy_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data_category:
+          type: string
+          enum: [call_recordings, transcripts, audit_events, model_traces, tool_calls, risk_events]
+        retention_days:
+          type: integer
+        jurisdiction:
+          type: string
+        auto_delete:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    RetentionPolicyList:
+      type: object
+      properties:
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetentionPolicy'
+
+    CreateRetentionPolicyRequest:
+      type: object
+      required: [tenant_id, name, data_category, retention_days]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data_category:
+          type: string
+          enum: [call_recordings, transcripts, audit_events, model_traces, tool_calls, risk_events]
+        retention_days:
+          type: integer
+          minimum: 30
+        jurisdiction:
+          type: string
+        auto_delete:
+          type: boolean
+          default: false
+
+    LegalHold:
+      type: object
+      properties:
+        hold_id:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        reason:
+          type: string
+        scope:
+          type: object
+          properties:
+            call_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+            customer_refs:
+              type: array
+              items:
+                type: string
+            date_range:
+              type: object
+              properties:
+                from:
+                  type: string
+                  format: date
+                to:
+                  type: string
+                  format: date
+        status:
+          type: string
+          enum: [active, released]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        released_at:
+          type: string
+          format: date-time
+          nullable: true
+        released_by:
+          type: string
+          nullable: true
+
+    LegalHoldList:
+      type: object
+      properties:
+        holds:
+          type: array
+          items:
+            $ref: '#/components/schemas/LegalHold'
+
+    CreateLegalHoldRequest:
+      type: object
+      required: [tenant_id, name, reason, scope, created_by]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        reason:
+          type: string
+        scope:
+          type: object
+          properties:
+            call_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+            customer_refs:
+              type: array
+              items:
+                type: string
+            date_range:
+              type: object
+              properties:
+                from:
+                  type: string
+                  format: date
+                to:
+                  type: string
+                  format: date
+        created_by:
+          type: string
+
+    ReleaseLegalHoldRequest:
+      type: object
+      required: [released_by, reason]
+      properties:
+        released_by:
+          type: string
+        reason:
+          type: string
+
+    RedactionRequest:
+      type: object
+      required: [tenant_id, scope, requested_by, reason]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        scope:
+          type: object
+          properties:
+            call_ids:
+              type: array
+              items:
+                type: string
+                format: uuid
+            customer_refs:
+              type: array
+              items:
+                type: string
+            data_fields:
+              type: array
+              items:
+                type: string
+              description: Specific fields to redact
+        requested_by:
+          type: string
+        reason:
+          type: string
+          enum: [gdpr_erasure, pdpa_erasure, data_minimization, customer_request]
+
+    RedactionRequestResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+        status:
+          type: string
+          enum: [pending_approval, approved, processing, completed, rejected]
+        events_affected:
+          type: integer
+        submitted_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

@@ -1,0 +1,820 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Conversation Runtime API
+  version: 1.0.0
+  description: |
+    Manages live conversation sessions for AI-handled calls. The Runtime
+    API is the central orchestrator: it creates sessions, processes caller
+    turns through the graph state machine, and exposes session control
+    endpoints for supervisor intervention and graph switching.
+
+    Terminology note: The handoff document uses "calls" and "events" as
+    resource names. This contract uses "sessions" and "turns" because each
+    call creates a session (which carries state, graph position, and slot
+    values), and each caller utterance is a "turn" in the conversation.
+    Mapping: POST /runtime/calls -> POST /sessions, GET /runtime/calls/{id}
+    -> GET /sessions/{id}, POST /runtime/calls/{id}/events -> POST
+    /sessions/{id}/turns, POST /runtime/calls/{id}/terminate -> DELETE
+    /sessions/{id}.
+
+    All endpoints require mTLS. Tenant isolation is enforced at every layer.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. Limits are per-tenant and per-session where
+    applicable. Turn processing is rate-limited per session (max 60/min) to
+    prevent abuse. Supervisor endpoints inherit tenant-level limits.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/runtime/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Sessions
+    description: Session lifecycle management
+  - name: Turns
+    description: Turn processing (core conversation loop)
+  - name: Control
+    description: Supervisor intervention and graph switching
+  - name: Health
+    description: Service health and readiness
+
+paths:
+  /sessions:
+    post:
+      operationId: createSession
+      summary: Create a new conversation session
+      description: |
+        Called by the Media Gateway when a new call arrives. Creates a session,
+        loads the tenant's graph, and returns the initial node for the greeting.
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Graph not found for tenant/workflow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /sessions/{session_id}:
+    get:
+      operationId: getSession
+      summary: Get current session state
+      tags: [Sessions]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /sessions/{session_id}/terminate:
+    post:
+      operationId: endSession
+      summary: End a session
+      description: |
+        Called when a call ends or is transferred. Persists final state
+        and emits session.ended audit event. Uses POST rather than DELETE
+        because termination triggers side effects (state persistence,
+        audit logging, transfer package generation).
+      tags: [Sessions]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EndSessionRequest'
+      responses:
+        '200':
+          description: Session ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndSessionResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /sessions/{session_id}/turns:
+    post:
+      operationId: processTurn
+      summary: Process a caller turn
+      description: |
+        Core processing endpoint. Receives transcribed caller speech, drives the
+        graph state machine forward, invokes LLM/RAG/Policy/Tools as needed, and
+        returns the AI response text plus state updates.
+
+        This is the hot path. Target latency: <100ms excluding LLM inference at p95.
+      tags: [Turns]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessTurnRequest'
+      responses:
+        '200':
+          description: Turn processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessTurnResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Session in conflicting state (transferring, ended)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '504':
+          description: LLM or dependency timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sessions/{session_id}/state:
+    get:
+      operationId: getSessionState
+      summary: Full session state dump
+      description: Returns complete session state including conversation history, slot values, and graph position. Used for debugging and audit replay.
+      tags: [Sessions]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Full session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStateDump'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /sessions/{session_id}/supervisor/whisper:
+    post:
+      operationId: supervisorWhisper
+      summary: Inject supervisor instruction into AI context
+      description: |
+        The instruction is added to the Conversation Runtime's context for the
+        next turn but is never spoken to the caller. Requires supervisor RBAC role.
+      tags: [Control]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhisperRequest'
+      responses:
+        '200':
+          description: Whisper instruction accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhisperResponse'
+        '403':
+          description: Insufficient supervisor privileges
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /sessions/{session_id}/supervisor/takeover:
+    post:
+      operationId: supervisorTakeover
+      summary: Supervisor takes control of the call
+      description: |
+        Locks the session immediately. AI disengages. Audio routes to the
+        supervisor's endpoint. Emits session.supervisor.action audit event.
+      tags: [Control]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TakeoverRequest'
+      responses:
+        '200':
+          description: Takeover initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TakeoverResponse'
+        '403':
+          description: Insufficient supervisor privileges
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Session already taken over or ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sessions/{session_id}/graph/switch:
+    post:
+      operationId: switchGraph
+      summary: Switch to a different graph mid-call
+      description: |
+        Used when intent detection determines a different workflow is needed
+        (e.g., caller starts with balance inquiry, then reports fraud). The
+        current graph state is preserved in session history.
+      tags: [Control]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchGraphRequest'
+      responses:
+        '200':
+          description: Graph switched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchGraphResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Target graph not found or not published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sessions/{session_id}/transfer:
+    post:
+      operationId: transferToHuman
+      summary: Transfer call to human agent
+      description: |
+        Generates a TransferPackage with full call context and initiates
+        handoff to the bank's queue management system. The session transitions
+        to "transferring" state.
+      tags: [Sessions]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '200':
+          description: Transfer initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Service health check
+      tags: [Health]
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    CreateSessionRequest:
+      type: object
+      required: [call_id, tenant_id, initial_graph_id, language]
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        initial_graph_id:
+          type: string
+          description: Graph identifier to load for this call
+        language:
+          type: string
+          example: en-SG
+        caller_metadata:
+          $ref: '#/components/schemas/CallerMetadata'
+
+    CallerMetadata:
+      type: object
+      properties:
+        ani:
+          type: string
+          description: Caller phone number (ANI)
+        channel:
+          type: string
+          enum: [pstn, sip, webrtc]
+        geographic_origin:
+          type: string
+        device_type:
+          type: string
+
+    CreateSessionResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        initial_node:
+          type: string
+          description: First graph node to execute
+        graph_version:
+          type: string
+        greeting_text:
+          type: string
+          description: Initial greeting for TTS
+
+    Session:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        graph_id:
+          type: string
+        graph_version:
+          type: string
+        current_node_id:
+          type: string
+        authentication_level:
+          $ref: '#/components/schemas/AuthLevel'
+        fraud_risk_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+        language:
+          type: string
+        turn_count:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        last_activity_at:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [active, transferring, ended]
+        transfer_reason:
+          type: string
+          nullable: true
+
+    AuthLevel:
+      type: string
+      enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+      description: |
+        AUTH_0: Unknown caller. Informational only.
+        AUTH_1: Identified by ANI. Low confidence.
+        AUTH_2: Basic authentication (KBA/single-factor).
+        AUTH_3: Step-up authentication (OTP/app push).
+        AUTH_4: Strong multi-factor. High-value actions.
+        AUTH_5: Human-verified, high assurance.
+
+    ProcessTurnRequest:
+      type: object
+      required: [transcript, turn_id]
+      properties:
+        transcript:
+          type: string
+          description: Transcribed caller speech (already redacted by Speech Layer)
+        turn_id:
+          type: string
+          format: uuid
+        asr_confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        language_detected:
+          type: string
+        barge_in:
+          type: boolean
+          default: false
+          description: Whether the caller interrupted TTS playback
+
+    ProcessTurnResponse:
+      type: object
+      properties:
+        response_text:
+          type: string
+          description: AI response for TTS playback
+        ssml:
+          type: string
+          nullable: true
+          description: SSML-formatted response if prosody control needed
+        next_node:
+          type: string
+          description: Graph node after this turn
+        slot_updates:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SlotValue'
+        actions_taken:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionResult'
+        policy_decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyDecisionSummary'
+        requires_dtmf:
+          type: boolean
+          default: false
+          description: Whether the next input should be captured via DTMF
+        end_call:
+          type: boolean
+          default: false
+        transfer_requested:
+          type: boolean
+          default: false
+        transfer_package:
+          $ref: '#/components/schemas/TransferPackage'
+          nullable: true
+
+    SlotValue:
+      type: object
+      properties:
+        name:
+          type: string
+        value: {}
+        source:
+          type: string
+          enum: [asr_extraction, llm_extraction, tool_result, manual]
+        confidence:
+          type: number
+          format: float
+        validated:
+          type: boolean
+
+    ActionResult:
+      type: object
+      properties:
+        action_id:
+          type: string
+        tool_name:
+          type: string
+        result:
+          type: string
+          enum: [success, failure, denied, timeout]
+        details:
+          type: object
+
+    PolicyDecisionSummary:
+      type: object
+      properties:
+        action:
+          type: string
+        decision:
+          type: string
+          enum: [allow, deny, step_up, human_approval]
+        reason_codes:
+          type: array
+          items:
+            type: string
+
+    TransferPackage:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        target_queue:
+          type: string
+        transfer_type:
+          type: string
+          enum: [warm, cold]
+        priority:
+          type: string
+          enum: [normal, urgent]
+        transcript_summary:
+          type: string
+        authentication_state:
+          $ref: '#/components/schemas/AuthLevel'
+        fraud_risk_score:
+          type: number
+          format: float
+        fraud_indicators:
+          type: array
+          items:
+            type: string
+        vulnerability_flags:
+          type: array
+          items:
+            type: string
+        current_graph_node:
+          type: string
+        caller_sentiment:
+          type: string
+        actions_taken:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionResult'
+        actions_pending:
+          type: array
+          items:
+            type: string
+        supervisor_notes:
+          type: string
+        call_duration_seconds:
+          type: integer
+
+    EndSessionRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [completed, transferred, dropped, error]
+
+    EndSessionResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        duration_seconds:
+          type: integer
+        turns_count:
+          type: integer
+        outcome:
+          type: string
+
+    SessionStateDump:
+      type: object
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        conversation_history:
+          type: array
+          items:
+            $ref: '#/components/schemas/Turn'
+        slots:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/SlotValue'
+        previous_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeVisit'
+
+    Turn:
+      type: object
+      properties:
+        turn_id:
+          type: string
+          format: uuid
+        speaker:
+          type: string
+          enum: [customer, ai, human_agent, system]
+          description: Aligned with data_architecture.md call_turns.speaker enum
+        text:
+          type: string
+          description: Redacted transcript
+        asr_confidence:
+          type: number
+          format: float
+          nullable: true
+        node_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    NodeVisit:
+      type: object
+      properties:
+        node_id:
+          type: string
+        entered_at:
+          type: string
+          format: date-time
+        exited_at:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+
+    WhisperRequest:
+      type: object
+      required: [instruction_text, supervisor_id]
+      properties:
+        instruction_text:
+          type: string
+          maxLength: 500
+        supervisor_id:
+          type: string
+
+    WhisperResponse:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+        applied_at_turn:
+          type: integer
+
+    TakeoverRequest:
+      type: object
+      required: [supervisor_id, takeover_reason]
+      properties:
+        supervisor_id:
+          type: string
+        takeover_reason:
+          type: string
+
+    TakeoverResponse:
+      type: object
+      properties:
+        takeover_id:
+          type: string
+        session_locked:
+          type: boolean
+        audio_routed:
+          type: boolean
+
+    SwitchGraphRequest:
+      type: object
+      required: [target_graph_id]
+      properties:
+        target_graph_id:
+          type: string
+        preserve_slots:
+          type: boolean
+          default: true
+          description: Whether to carry slot values into the new graph
+        reason:
+          type: string
+
+    SwitchGraphResponse:
+      type: object
+      properties:
+        new_graph_id:
+          type: string
+        new_graph_version:
+          type: string
+        initial_node:
+          type: string
+        slots_carried:
+          type: integer
+
+    TransferRequest:
+      type: object
+      required: [target_queue]
+      properties:
+        target_queue:
+          type: string
+        transfer_type:
+          type: string
+          enum: [warm, cold]
+          default: warm
+        priority:
+          type: string
+          enum: [normal, urgent]
+          default: normal
+        supervisor_notes:
+          type: string
+
+    TransferResponse:
+      type: object
+      properties:
+        transfer_id:
+          type: string
+        transfer_package:
+          $ref: '#/components/schemas/TransferPackage'
+        estimated_wait_seconds:
+          type: integer
+          nullable: true
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        active_sessions:
+          type: integer
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [up, down, degraded]
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: Service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

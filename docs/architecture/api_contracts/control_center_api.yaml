@@ -1,0 +1,1010 @@
+openapi: 3.1.0
+info:
+  title: VocalIQ Human Control Center API
+  version: 1.0.0
+  description: |
+    Provides supervisors with exception-driven oversight and real-time
+    intervention capability over AI-handled calls. The Control Center is
+    designed around exception alerts, risk thresholds, and approval
+    workflows so human attention is focused where it matters.
+
+    Includes live call monitoring, supervisor actions (whisper, takeover,
+    transfer), A5 approval workflows, and post-call QA review.
+
+    Rate limiting: All endpoints return X-RateLimit-Limit, X-RateLimit-Remaining,
+    and X-RateLimit-Reset headers. WebSocket streams are rate-limited by
+    connection count per supervisor. Approval endpoints are rate-limited
+    per-supervisor to prevent automated bulk approvals.
+  contact:
+    name: VocalIQ Platform Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://{region}.api.vocaliq.internal/control-center/v1
+    variables:
+      region:
+        default: ap-southeast-1
+        enum: [ap-southeast-1, eu-west-1, us-east-1]
+
+security:
+  - mtls: []
+  - bearerAuth: []
+
+tags:
+  - name: Monitoring
+    description: Live call monitoring and alerts
+  - name: Intervention
+    description: Supervisor actions on live calls
+  - name: Approvals
+    description: A5 human approval workflows
+  - name: QA
+    description: Post-call quality assurance
+  - name: Dashboard
+    description: Supervisor dashboard and metrics
+
+paths:
+  /live-calls:
+    get:
+      operationId: listLiveCalls
+      summary: List all active AI-handled calls
+      description: Returns summary metrics for active calls. Supports filtering by risk level, alert status, and tenant.
+      tags: [Monitoring]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+            enum: [low, elevated, high, very_high, critical]
+        - name: has_alerts
+          in: query
+          schema:
+            type: boolean
+        - name: supervisor_id
+          in: query
+          schema:
+            type: string
+          description: Filter to calls assigned to this supervisor's team
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Active call list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveCallList'
+
+  /live-calls/{call_id}:
+    get:
+      operationId: getLiveCall
+      summary: Get live call details
+      description: Returns current state snapshot including transcript, risk score, alerts, and graph position.
+      tags: [Monitoring]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      responses:
+        '200':
+          description: Call details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveCallDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /live-calls/{call_id}/stream:
+    get:
+      operationId: streamLiveCall
+      summary: WebSocket stream for real-time call state
+      description: |
+        Streams transcript turns, node transitions, risk score updates,
+        and alert events in real time. Requires WebSocket upgrade.
+      tags: [Monitoring]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      responses:
+        '101':
+          description: WebSocket connection established
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /live-calls/{call_id}/whisper:
+    post:
+      operationId: sendWhisper
+      summary: Send instruction to AI during live call
+      description: |
+        Instruction is injected into the Conversation Runtime's context
+        but not spoken to the caller. Requires supervisor role for the
+        call's tenant.
+      tags: [Intervention]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhisperRequest'
+      responses:
+        '200':
+          description: Whisper sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhisperResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /live-calls/{call_id}/takeover:
+    post:
+      operationId: takeoverCall
+      summary: Supervisor takes control of call
+      description: |
+        Transfers audio to supervisor's endpoint. AI disengages immediately.
+        Session is locked. Emits hcc.takeover.initiated audit event.
+      tags: [Intervention]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TakeoverRequest'
+      responses:
+        '200':
+          description: Takeover initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TakeoverResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Call already taken over or ended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /live-calls/{call_id}/transfer:
+    post:
+      operationId: transferCall
+      summary: Transfer call to human agent queue
+      description: Generates a TransferPackage with full call context and routes to the bank's queue management system.
+      tags: [Intervention]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferCallRequest'
+      responses:
+        '200':
+          description: Transfer initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferCallResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /live-calls/{call_id}/approve-action:
+    post:
+      operationId: approveAction
+      summary: Approve or deny an A5 action
+      description: |
+        Responds to a pending A5 approval request. If approved, the Tool
+        Gateway executes the action. If denied, the Conversation Runtime
+        informs the caller that manual processing is required.
+
+        Design note: this contract uses a single endpoint with a decision
+        field (approve/deny) rather than separate /approve and /deny
+        endpoints. This reduces the surface area for the supervisor UI and
+        matches the handoff specification (Section 17.5). The component spec's
+        separate approve/deny endpoints should be reconciled in a future
+        component spec revision.
+      tags: [Approvals]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionApprovalRequest'
+      responses:
+        '200':
+          description: Approval decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionApprovalResponse'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Approval request expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /approvals/pending:
+    get:
+      operationId: listPendingApprovals
+      summary: List all pending A5 approval requests
+      tags: [Approvals]
+      parameters:
+        - name: supervisor_id
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+      responses:
+        '200':
+          description: Pending approvals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingApprovalList'
+
+  /alerts:
+    get:
+      operationId: listAlerts
+      summary: List supervisor alerts
+      tags: [Monitoring]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, acknowledged, resolved]
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+        - name: alert_type
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageToken'
+      responses:
+        '200':
+          description: Alert list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertList'
+
+  /alerts/{alert_id}/acknowledge:
+    post:
+      operationId: acknowledgeAlert
+      summary: Acknowledge an alert
+      tags: [Monitoring]
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcknowledgeAlertRequest'
+      responses:
+        '200':
+          description: Alert acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupervisorAlert'
+
+  /calls/{call_id}/replay:
+    get:
+      operationId: getCallReplay
+      summary: Get call replay data
+      description: Returns recording, transcript, and synchronized event timeline for post-call review.
+      tags: [QA]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      responses:
+        '200':
+          description: Replay data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallReplay'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /calls/{call_id}/review:
+    post:
+      operationId: submitCallReview
+      summary: Submit post-call QA review
+      tags: [QA]
+      parameters:
+        - $ref: '#/components/parameters/CallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QAReviewRequest'
+      responses:
+        '201':
+          description: Review submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAReview'
+
+  /reviews/summary:
+    get:
+      operationId: getReviewSummary
+      summary: Aggregate QA scores and trends
+      tags: [QA]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: QA summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QASummary'
+
+  /dashboard/metrics:
+    get:
+      operationId: getDashboardMetrics
+      summary: Supervisor dashboard aggregate metrics
+      tags: [Dashboard]
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Dashboard metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardMetrics'
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    CallId:
+      name: call_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        default: 20
+        maximum: 100
+    PageToken:
+      name: page_token
+      in: query
+      schema:
+        type: string
+
+  schemas:
+    LiveCallList:
+      type: object
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/LiveCallSummary'
+        total_count:
+          type: integer
+        next_page_token:
+          type: string
+          nullable: true
+
+    LiveCallSummary:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        duration_seconds:
+          type: integer
+        current_node:
+          type: string
+        risk_level:
+          type: string
+          enum: [low, elevated, high, very_high, critical]
+        risk_score:
+          type: number
+          format: float
+        alert_count:
+          type: integer
+        auth_level:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        has_pending_approval:
+          type: boolean
+        graph_id:
+          type: string
+
+    LiveCallDetail:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        graph_id:
+          type: string
+        graph_version:
+          type: string
+        current_node:
+          type: string
+        auth_level:
+          type: string
+        risk_score:
+          type: number
+          format: float
+        risk_level:
+          type: string
+        fraud_indicators:
+          type: array
+          items:
+            type: string
+        vulnerability_flags:
+          type: array
+          items:
+            type: string
+        turn_count:
+          type: integer
+        duration_seconds:
+          type: integer
+        last_turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/TurnSummary'
+          description: Last 5 turns for quick context
+        active_alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupervisorAlert'
+        pending_approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingApproval'
+
+    TurnSummary:
+      type: object
+      properties:
+        speaker:
+          type: string
+          enum: [customer, ai, human_agent, system]
+          description: Aligned with data_architecture.md call_turns.speaker enum
+        text:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    SupervisorAlert:
+      type: object
+      properties:
+        alert_id:
+          type: string
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        alert_type:
+          type: string
+          enum:
+            - fraud
+            - vulnerability
+            - complaint
+            - low_confidence
+            - auth_failure
+            - tool_failure
+            - repair_loop
+            - customer_distress
+            - advice_boundary
+            - high_value
+            - collections_hardship
+            - approval_required
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+        message:
+          type: string
+        context:
+          $ref: '#/components/schemas/AlertContext'
+        created_at:
+          type: string
+          format: date-time
+        acknowledged_at:
+          type: string
+          format: date-time
+          nullable: true
+        acknowledged_by:
+          type: string
+          nullable: true
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AlertContext:
+      type: object
+      properties:
+        current_graph_node:
+          type: string
+        risk_score:
+          type: number
+          format: float
+        risk_level:
+          type: string
+        auth_level:
+          type: string
+        turn_count:
+          type: integer
+        call_duration_seconds:
+          type: integer
+        last_3_turns_summary:
+          type: string
+        active_fraud_indicators:
+          type: array
+          items:
+            type: string
+        vulnerability_flags:
+          type: array
+          items:
+            type: string
+
+    AlertList:
+      type: object
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupervisorAlert'
+        next_page_token:
+          type: string
+          nullable: true
+
+    AcknowledgeAlertRequest:
+      type: object
+      required: [supervisor_id]
+      properties:
+        supervisor_id:
+          type: string
+        notes:
+          type: string
+
+    WhisperRequest:
+      type: object
+      required: [instruction_text, supervisor_id]
+      properties:
+        instruction_text:
+          type: string
+          maxLength: 500
+        supervisor_id:
+          type: string
+
+    WhisperResponse:
+      type: object
+      properties:
+        whisper_id:
+          type: string
+        accepted:
+          type: boolean
+        delivered_at:
+          type: string
+          format: date-time
+
+    TakeoverRequest:
+      type: object
+      required: [supervisor_id, reason]
+      properties:
+        supervisor_id:
+          type: string
+        reason:
+          type: string
+        supervisor_endpoint:
+          type: string
+          description: SIP URI or softphone endpoint for audio routing
+
+    TakeoverResponse:
+      type: object
+      properties:
+        takeover_id:
+          type: string
+        status:
+          type: string
+          enum: [initiated, audio_routing, active, failed]
+        audio_routed:
+          type: boolean
+
+    TransferCallRequest:
+      type: object
+      required: [target_queue, supervisor_id]
+      properties:
+        target_queue:
+          type: string
+        supervisor_id:
+          type: string
+        priority:
+          type: string
+          enum: [normal, urgent]
+          default: normal
+        notes:
+          type: string
+
+    TransferCallResponse:
+      type: object
+      properties:
+        transfer_id:
+          type: string
+        target_queue:
+          type: string
+        estimated_wait_seconds:
+          type: integer
+          nullable: true
+        transfer_package:
+          $ref: '#/components/schemas/TransferPackage'
+          description: Full transfer context package for the receiving agent or queue
+
+    TransferPackage:
+      type: object
+      description: |
+        Shared schema with runtime_api.yaml. Contains the full context
+        handoff for warm or cold transfers, including authentication state,
+        risk assessment, and conversation history.
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        target_queue:
+          type: string
+        transfer_type:
+          type: string
+          enum: [warm, cold]
+        priority:
+          type: string
+          enum: [normal, urgent]
+        transcript_summary:
+          type: string
+        authentication_state:
+          type: string
+          enum: [AUTH_0, AUTH_1, AUTH_2, AUTH_3, AUTH_4, AUTH_5]
+        fraud_risk_score:
+          type: number
+          format: float
+        fraud_indicators:
+          type: array
+          items:
+            type: string
+        vulnerability_flags:
+          type: array
+          items:
+            type: string
+        current_graph_node:
+          type: string
+        caller_sentiment:
+          type: string
+        actions_taken:
+          type: array
+          items:
+            type: string
+        actions_pending:
+          type: array
+          items:
+            type: string
+        supervisor_notes:
+          type: string
+          nullable: true
+        call_duration_seconds:
+          type: integer
+
+    PendingApproval:
+      type: object
+      properties:
+        approval_id:
+          type: string
+        call_id:
+          type: string
+          format: uuid
+        action_requested:
+          type: string
+        context_summary:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+
+    PendingApprovalList:
+      type: object
+      properties:
+        approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingApproval'
+
+    ActionApprovalRequest:
+      type: object
+      required: [approval_id, decision, supervisor_id]
+      properties:
+        approval_id:
+          type: string
+        decision:
+          type: string
+          enum: [approve, deny]
+        supervisor_id:
+          type: string
+        notes:
+          type: string
+        denial_reason:
+          type: string
+          description: Required when decision is deny
+        alternative_action:
+          type: string
+          nullable: true
+
+    ActionApprovalResponse:
+      type: object
+      properties:
+        approval_id:
+          type: string
+        decision:
+          type: string
+        processed_at:
+          type: string
+          format: date-time
+        action_executed:
+          type: boolean
+          description: True if approved and Tool Gateway executed the action
+
+    CallReplay:
+      type: object
+      properties:
+        call_id:
+          type: string
+          format: uuid
+        recording_url:
+          type: string
+          format: uri
+          nullable: true
+        transcript:
+          type: array
+          items:
+            $ref: '#/components/schemas/TurnSummary'
+        events_timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEvent'
+        duration_seconds:
+          type: integer
+
+    TimelineEvent:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+        description:
+          type: string
+        details:
+          type: object
+
+    QAReviewRequest:
+      type: object
+      required: [reviewer_id, scores]
+      properties:
+        reviewer_id:
+          type: string
+        scores:
+          $ref: '#/components/schemas/QAScores'
+        notes:
+          type: string
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [needs_investigation, training_opportunity, policy_gap, model_issue]
+
+    QAScores:
+      type: object
+      properties:
+        accuracy:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 5
+        compliance:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 5
+        customer_experience:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 5
+
+    QAReview:
+      type: object
+      properties:
+        review_id:
+          type: string
+        call_id:
+          type: string
+          format: uuid
+        reviewer_id:
+          type: string
+        scores:
+          $ref: '#/components/schemas/QAScores'
+        notes:
+          type: string
+        flags:
+          type: array
+          items:
+            type: string
+        submitted_at:
+          type: string
+          format: date-time
+
+    QASummary:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from:
+              type: string
+              format: date
+            to:
+              type: string
+              format: date
+        total_reviews:
+          type: integer
+        average_scores:
+          $ref: '#/components/schemas/QAScores'
+        flag_counts:
+          type: object
+          additionalProperties:
+            type: integer
+
+    DashboardMetrics:
+      type: object
+      properties:
+        active_calls:
+          type: integer
+        calls_monitored:
+          type: integer
+        active_alerts:
+          type: object
+          properties:
+            critical:
+              type: integer
+            high:
+              type: integer
+            medium:
+              type: integer
+            low:
+              type: integer
+        pending_approvals:
+          type: integer
+        avg_alert_response_time_ms:
+          type: integer
+        avg_approval_response_time_ms:
+          type: integer
+        takeovers_today:
+          type: integer
+        transfers_today:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient privileges
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
