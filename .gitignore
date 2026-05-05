@@ -7,6 +7,9 @@
 # API keys and secrets
 11Labs.txt
 
+# Utility scripts
+push_to_github.bat
+
 # OS files
 Thumbs.db
 Desktop.ini
